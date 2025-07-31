@@ -1,520 +1,626 @@
 -- =====================================================
--- 성능 테스트 실행 및 결과 분석 스크립트
+-- QIRO 성능 테스트 실행 스크립트
 -- PostgreSQL 17.5 기반
 -- 작성일: 2025-01-30
--- 설명: 성능 테스트 자동 실행 및 결과 분석
+-- 설명: 멀티테넌시 환경 성능 테스트 자동 실행 및 결과 분석
 -- =====================================================
 
-\set ECHO all
-\timing on
+-- =====================================================
+-- 1. 성능 테스트 결과 저장 테이블
+-- =====================================================
 
--- 성능 테스트 결과 저장 테이블 생성
+-- 성능 테스트 결과 저장 테이블
 CREATE TABLE IF NOT EXISTS performance_test_results (
-    id BIGSERIAL PRIMARY KEY,
+    test_id BIGSERIAL PRIMARY KEY,
     test_name VARCHAR(255) NOT NULL,
     test_category VARCHAR(100) NOT NULL,
-    execution_time_ms DECIMAL(10,2) NOT NULL,
-    rows_processed BIGINT,
-    buffer_hits BIGINT,
-    buffer_reads BIGINT,
-    hit_ratio DECIMAL(5,2),
-    test_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    test_description TEXT,
-    query_plan TEXT,
-    performance_grade CHAR(1) CHECK (performance_grade IN ('A', 'B', 'C', 'D', 'F')),
-    recommendations TEXT
+    execution_time_ms BIGINT NOT NULL,
+    rows_processed INTEGER DEFAULT 0,
+    memory_usage_mb DECIMAL(10,2),
+    cpu_usage_percent DECIMAL(5,2),
+    cache_hit_ratio DECIMAL(5,2),
+    test_parameters JSONB DEFAULT '{}',
+    test_environment JSONB DEFAULT '{}',
+    executed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    executed_by VARCHAR(100) DEFAULT current_user
 );
 
--- 성능 테스트 실행 함수
-CREATE OR REPLACE FUNCTION execute_performance_test(
-    test_name TEXT,
-    test_category TEXT,
-    test_query TEXT,
-    expected_max_time_ms DECIMAL DEFAULT 2000,
-    test_description TEXT DEFAULT NULL
+-- 성능 테스트 세션 정보 테이블
+CREATE TABLE IF NOT EXISTS performance_test_sessions (
+    session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_name VARCHAR(255) NOT NULL,
+    test_description TEXT,
+    database_version TEXT,
+    server_specs JSONB,
+    test_data_size JSONB,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    total_tests INTEGER DEFAULT 0,
+    passed_tests INTEGER DEFAULT 0,
+    failed_tests INTEGER DEFAULT 0,
+    session_status VARCHAR(20) DEFAULT 'RUNNING' CHECK (session_status IN ('RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'))
+);
+
+-- =====================================================
+-- 2. 성능 테스트 실행 함수
+-- =====================================================
+
+-- 성능 테스트 세션 시작 함수
+CREATE OR REPLACE FUNCTION start_performance_test_session(
+    p_session_name VARCHAR(255),
+    p_description TEXT DEFAULT NULL
 )
-RETURNS VOID AS $$
+RETURNS UUID AS $
 DECLARE
-    start_time TIMESTAMP;
-    end_time TIMESTAMP;
-    execution_time_ms DECIMAL;
-    explain_result TEXT;
-    rows_processed BIGINT;
-    buffer_hits BIGINT;
-    buffer_reads BIGINT;
-    hit_ratio DECIMAL;
-    performance_grade CHAR(1);
-    recommendations TEXT;
+    session_id UUID;
+    db_version TEXT;
+    server_info JSONB;
+    data_size_info JSONB;
 BEGIN
-    -- 통계 초기화
-    PERFORM pg_stat_reset();
+    -- 데이터베이스 버전 정보 수집
+    SELECT version() INTO db_version;
     
-    -- 실행 시간 측정 시작
-    start_time := clock_timestamp();
-    
-    -- 쿼리 실행
-    EXECUTE test_query;
-    
-    -- 실행 시간 측정 종료
-    end_time := clock_timestamp();
-    execution_time_ms := EXTRACT(EPOCH FROM (end_time - start_time)) * 1000;
-    
-    -- EXPLAIN ANALYZE 결과 수집
-    EXECUTE 'EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ' || test_query INTO explain_result;
-    
-    -- 버퍼 통계 수집
-    SELECT 
-        COALESCE(SUM(heap_blks_hit), 0),
-        COALESCE(SUM(heap_blks_read), 0),
-        CASE 
-            WHEN SUM(heap_blks_hit + heap_blks_read) = 0 THEN 0
-            ELSE ROUND(SUM(heap_blks_hit) * 100.0 / SUM(heap_blks_hit + heap_blks_read), 2)
-        END
-    INTO buffer_hits, buffer_reads, hit_ratio
-    FROM pg_statio_user_tables;
-    
-    -- 처리된 행 수 추출 (EXPLAIN 결과에서)
-    rows_processed := COALESCE(
-        (regexp_match(explain_result, 'rows=(\d+)'))[1]::BIGINT, 
-        0
+    -- 서버 정보 수집
+    server_info := jsonb_build_object(
+        'shared_buffers', current_setting('shared_buffers'),
+        'work_mem', current_setting('work_mem'),
+        'maintenance_work_mem', current_setting('maintenance_work_mem'),
+        'effective_cache_size', current_setting('effective_cache_size'),
+        'max_connections', current_setting('max_connections')
     );
     
-    -- 성능 등급 결정
-    performance_grade := CASE 
-        WHEN execution_time_ms <= expected_max_time_ms * 0.5 THEN 'A'
-        WHEN execution_time_ms <= expected_max_time_ms * 0.8 THEN 'B'
-        WHEN execution_time_ms <= expected_max_time_ms THEN 'C'
-        WHEN execution_time_ms <= expected_max_time_ms * 1.5 THEN 'D'
-        ELSE 'F'
+    -- 테스트 데이터 크기 정보 수집
+    data_size_info := jsonb_build_object(
+        'companies_count', (SELECT COUNT(*) FROM companies),
+        'users_count', (SELECT COUNT(*) FROM users),
+        'building_groups_count', (SELECT COUNT(*) FROM building_groups),
+        'verification_records_count', (SELECT COUNT(*) FROM business_verification_records),
+        'database_size', pg_size_pretty(pg_database_size(current_database()))
+    );
+    
+    -- 세션 생성
+    INSERT INTO performance_test_sessions (
+        session_name,
+        test_description,
+        database_version,
+        server_specs,
+        test_data_size
+    ) VALUES (
+        p_session_name,
+        p_description,
+        db_version,
+        server_info,
+        data_size_info
+    ) RETURNING session_id;
+    
+    RAISE NOTICE '성능 테스트 세션 시작: % (ID: %)', p_session_name, session_id;
+    RETURN session_id;
+END;
+$ LANGUAGE plpgsql;
+
+-- 개별 성능 테스트 실행 함수
+CREATE OR REPLACE FUNCTION execute_performance_test(
+    p_session_id UUID,
+    p_test_name VARCHAR(255),
+    p_test_category VARCHAR(100),
+    p_test_query TEXT,
+    p_test_parameters JSONB DEFAULT '{}'
+)
+RETURNS BIGINT AS $
+DECLARE
+    start_time TIMESTAMPTZ;
+    end_time TIMESTAMPTZ;
+    execution_time_ms BIGINT;
+    rows_processed INTEGER := 0;
+    cache_hit_ratio DECIMAL(5,2);
+    test_result_id BIGINT;
+    query_result RECORD;
+BEGIN
+    -- 캐시 히트 비율 측정 시작
+    SELECT 
+        ROUND(100.0 * sum(blks_hit) / NULLIF(sum(blks_hit) + sum(blks_read), 0), 2)
+    INTO cache_hit_ratio
+    FROM pg_stat_database
+    WHERE datname = current_database();
+    
+    -- 테스트 실행
+    start_time := clock_timestamp();
+    
+    BEGIN
+        EXECUTE p_test_query;
+        GET DIAGNOSTICS rows_processed = ROW_COUNT;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE '테스트 실행 오류 [%]: %', p_test_name, SQLERRM;
+        rows_processed := -1;
     END;
     
-    -- 권장사항 생성
-    recommendations := CASE 
-        WHEN performance_grade = 'F' THEN '심각한 성능 문제 - 즉시 최적화 필요'
-        WHEN performance_grade = 'D' THEN '성능 개선 필요 - 인덱스 검토 권장'
-        WHEN performance_grade = 'C' THEN '성능 모니터링 필요'
-        WHEN performance_grade = 'B' THEN '양호한 성능'
-        ELSE '우수한 성능'
-    END;
-    
-    IF hit_ratio < 90 THEN
-        recommendations := recommendations || ' | 캐시 히트율 낮음 - 메모리 설정 검토';
-    END IF;
+    end_time := clock_timestamp();
+    execution_time_ms := EXTRACT(EPOCH FROM (end_time - start_time) * 1000)::BIGINT;
     
     -- 결과 저장
     INSERT INTO performance_test_results (
-        test_name, test_category, execution_time_ms, rows_processed,
-        buffer_hits, buffer_reads, hit_ratio, test_description,
-        query_plan, performance_grade, recommendations
+        test_name,
+        test_category,
+        execution_time_ms,
+        rows_processed,
+        cache_hit_ratio,
+        test_parameters
     ) VALUES (
-        test_name, test_category, execution_time_ms, rows_processed,
-        buffer_hits, buffer_reads, hit_ratio, test_description,
-        explain_result, performance_grade, recommendations
+        p_test_name,
+        p_test_category,
+        execution_time_ms,
+        rows_processed,
+        cache_hit_ratio,
+        p_test_parameters
+    ) RETURNING test_id INTO test_result_id;
+    
+    RAISE NOTICE '테스트 완료 [%]: %ms, % rows', p_test_name, execution_time_ms, rows_processed;
+    RETURN test_result_id;
+END;
+$ LANGUAGE plpgsql;
+
+-- 성능 테스트 세션 완료 함수
+CREATE OR REPLACE FUNCTION complete_performance_test_session(
+    p_session_id UUID
+)
+RETURNS VOID AS $
+DECLARE
+    test_stats RECORD;
+BEGIN
+    -- 테스트 통계 계산
+    SELECT 
+        COUNT(*) as total_tests,
+        COUNT(CASE WHEN rows_processed >= 0 THEN 1 END) as passed_tests,
+        COUNT(CASE WHEN rows_processed < 0 THEN 1 END) as failed_tests
+    INTO test_stats
+    FROM performance_test_results ptr
+    WHERE ptr.executed_at >= (
+        SELECT started_at FROM performance_test_sessions WHERE session_id = p_session_id
     );
     
-    RAISE NOTICE '테스트 완료: % | 실행시간: %ms | 등급: % | %', 
-        test_name, execution_time_ms, performance_grade, recommendations;
+    -- 세션 완료 처리
+    UPDATE performance_test_sessions 
+    SET 
+        completed_at = now(),
+        total_tests = test_stats.total_tests,
+        passed_tests = test_stats.passed_tests,
+        failed_tests = test_stats.failed_tests,
+        session_status = CASE 
+            WHEN test_stats.failed_tests = 0 THEN 'COMPLETED'
+            ELSE 'FAILED'
+        END
+    WHERE session_id = p_session_id;
+    
+    RAISE NOTICE '성능 테스트 세션 완료: 총 % 테스트, % 성공, % 실패', 
+                 test_stats.total_tests, test_stats.passed_tests, test_stats.failed_tests;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 성능 테스트 실행
+-- 3. 종합 성능 테스트 실행 함수
 -- =====================================================
 
--- 1. 기본 조회 성능 테스트
-SELECT execute_performance_test(
-    '건물별_호실_현황_조회',
-    'BASIC_QUERY',
-    'SELECT b.name, COUNT(*) as total_units, 
-     COUNT(CASE WHEN u.status = ''OCCUPIED'' THEN 1 END) as occupied_units
-     FROM buildings b JOIN units u ON b.id = u.building_id 
-     WHERE b.name LIKE ''성능테스트빌딩%'' 
-     GROUP BY b.id, b.name ORDER BY b.name',
-    2000,
-    'NFR-PF-002: 데이터 조회 결과 2초 이내 표시'
-);
+-- 전체 성능 테스트 스위트 실행
+CREATE OR REPLACE FUNCTION run_comprehensive_performance_test()
+RETURNS UUID AS $
+DECLARE
+    session_id UUID;
+    test_company_id UUID;
+    test_user_id UUID;
+    test_group_id UUID;
+BEGIN
+    -- 테스트 세션 시작
+    session_id := start_performance_test_session(
+        'Comprehensive Performance Test',
+        'QIRO 멀티테넌시 환경 종합 성능 테스트'
+    );
+    
+    -- 테스트 데이터 준비
+    SELECT company_id INTO test_company_id FROM companies LIMIT 1;
+    SELECT user_id INTO test_user_id FROM users WHERE company_id = test_company_id LIMIT 1;
+    SELECT group_id INTO test_group_id FROM building_groups WHERE company_id = test_company_id LIMIT 1;
+    
+    -- 테스트 1: 기본 조회 성능
+    PERFORM execute_performance_test(
+        session_id,
+        'Company List Query',
+        'Basic Queries',
+        'SELECT * FROM companies WHERE verification_status = ''VERIFIED'' ORDER BY created_at DESC LIMIT 100'
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'Active Users Query',
+        'Basic Queries',
+        format('SELECT * FROM users WHERE company_id = ''%s'' AND status = ''ACTIVE'' ORDER BY last_login_at DESC LIMIT 50', test_company_id)
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'Building Groups Query',
+        'Basic Queries',
+        format('SELECT * FROM building_groups WHERE company_id = ''%s'' AND is_active = true ORDER BY created_at DESC', test_company_id)
+    );
+    
+    -- 테스트 2: 복합 조인 쿼리 성능
+    PERFORM execute_performance_test(
+        session_id,
+        'User Role Assignment Query',
+        'Join Queries',
+        format('SELECT u.*, r.role_name FROM users u JOIN user_role_links url ON u.user_id = url.user_id JOIN roles r ON url.role_id = r.role_id WHERE u.company_id = ''%s''', test_company_id)
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'Group Assignment Details Query',
+        'Join Queries',
+        format('SELECT bg.*, COUNT(bga.building_id) as building_count, COUNT(uga.user_id) as user_count FROM building_groups bg LEFT JOIN building_group_assignments bga ON bg.group_id = bga.group_id AND bga.is_active = true LEFT JOIN user_group_assignments uga ON bg.group_id = uga.group_id AND uga.is_active = true WHERE bg.company_id = ''%s'' GROUP BY bg.group_id', test_company_id)
+    );
+    
+    -- 테스트 3: 집계 쿼리 성능
+    PERFORM execute_performance_test(
+        session_id,
+        'Monthly Statistics Query',
+        'Aggregation Queries',
+        'SELECT DATE_TRUNC(''month'', created_at) as month, verification_status, COUNT(*) FROM companies WHERE created_at >= CURRENT_DATE - INTERVAL ''12 months'' GROUP BY DATE_TRUNC(''month'', created_at), verification_status ORDER BY month DESC'
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'User Activity Statistics Query',
+        'Aggregation Queries',
+        'SELECT c.company_name, COUNT(u.user_id) as total_users, COUNT(CASE WHEN u.status = ''ACTIVE'' THEN 1 END) as active_users FROM companies c LEFT JOIN users u ON c.company_id = u.company_id WHERE c.verification_status = ''VERIFIED'' GROUP BY c.company_id, c.company_name HAVING COUNT(u.user_id) > 0 ORDER BY active_users DESC LIMIT 50'
+    );
+    
+    -- 테스트 4: 파티션 테이블 쿼리 성능
+    PERFORM execute_performance_test(
+        session_id,
+        'Recent Verification Records Query',
+        'Partition Queries',
+        format('SELECT * FROM business_verification_records WHERE company_id = ''%s'' AND created_at >= CURRENT_DATE - INTERVAL ''30 days'' ORDER BY created_at DESC', test_company_id)
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'Active Phone Tokens Query',
+        'Partition Queries',
+        format('SELECT * FROM phone_verification_tokens WHERE user_id = ''%s'' AND is_used = false AND expires_at > now() ORDER BY created_at DESC', test_user_id)
+    );
+    
+    -- 테스트 5: 인덱스 효율성 테스트
+    PERFORM execute_performance_test(
+        session_id,
+        'Company Search by Name',
+        'Index Tests',
+        'SELECT * FROM companies WHERE company_name ILIKE ''%Test%'' ORDER BY company_name'
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'User Search by Email',
+        'Index Tests',
+        'SELECT * FROM users WHERE email ILIKE ''%test%'' ORDER BY email'
+    );
+    
+    -- 테스트 6: RLS 성능 테스트
+    PERFORM set_config('app.current_company_id', test_company_id::TEXT, false);
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'RLS Users Query',
+        'RLS Tests',
+        'SELECT * FROM users WHERE status = ''ACTIVE'' ORDER BY created_at DESC LIMIT 50'
+    );
+    
+    PERFORM execute_performance_test(
+        session_id,
+        'RLS Building Groups Query',
+        'RLS Tests',
+        'SELECT * FROM building_groups WHERE is_active = true ORDER BY created_at DESC'
+    );
+    
+    PERFORM set_config('app.current_company_id', '', false);
+    
+    -- 세션 완료
+    PERFORM complete_performance_test_session(session_id);
+    
+    RETURN session_id;
+END;
+$ LANGUAGE plpgsql;
 
--- 2. 복잡한 집계 쿼리 테스트
-SELECT execute_performance_test(
-    '월별_관리비_수익_분석',
-    'COMPLEX_AGGREGATION',
-    'SELECT b.name, bm.billing_year, bm.billing_month, fi.name, 
-     COUNT(mf.id) as calculation_count, SUM(mf.calculated_amount) as total_calculated
-     FROM buildings b 
-     JOIN billing_months bm ON b.id = bm.building_id
-     JOIN monthly_fees mf ON bm.id = mf.billing_month_id
-     JOIN fee_items fi ON mf.fee_item_id = fi.id
-     WHERE b.name LIKE ''성능테스트빌딩%''
-     GROUP BY b.id, b.name, bm.billing_year, bm.billing_month, fi.id, fi.name
-     ORDER BY b.name, bm.billing_year DESC, bm.billing_month DESC',
-    10000,
-    'NFR-PF-003: 관리비 자동 계산 500세대 기준 10초 이내'
-);
-
--- 3. 대용량 검침 데이터 조회 테스트
-SELECT execute_performance_test(
-    '대용량_검침_데이터_집계',
-    'LARGE_DATA_QUERY',
-    'SELECT b.name, umr.meter_type, COUNT(*) as reading_count,
-     SUM(umr.usage_amount) as total_usage, AVG(umr.usage_amount) as avg_usage
-     FROM buildings b
-     JOIN billing_months bm ON b.id = bm.building_id
-     JOIN unit_meter_readings umr ON bm.id = umr.billing_month_id
-     WHERE b.name LIKE ''성능테스트빌딩%''
-     GROUP BY b.id, b.name, umr.meter_type
-     ORDER BY b.name, umr.meter_type',
-    5000,
-    '대용량 검침 데이터 조회 및 집계 성능'
-);
-
--- 4. 미납 현황 분석 테스트
-SELECT execute_performance_test(
-    '미납_현황_분석',
-    'BUSINESS_LOGIC',
-    'SELECT b.name, u.unit_number, i.total_amount,
-     COALESCE(SUM(p.amount), 0) as paid_amount,
-     i.total_amount - COALESCE(SUM(p.amount), 0) as outstanding_amount,
-     CURRENT_DATE - i.due_date as overdue_days
-     FROM buildings b
-     JOIN units u ON b.id = u.building_id
-     JOIN billing_months bm ON b.id = bm.building_id
-     JOIN invoices i ON bm.id = i.billing_month_id AND u.id = i.unit_id
-     LEFT JOIN payments p ON i.id = p.invoice_id
-     WHERE b.name LIKE ''성능테스트빌딩%''
-     AND i.status IN (''ISSUED'', ''SENT'', ''VIEWED'', ''OVERDUE'')
-     GROUP BY b.id, b.name, u.id, u.unit_number, i.id, i.total_amount, i.due_date
-     HAVING i.total_amount - COALESCE(SUM(p.amount), 0) > 0
-     ORDER BY overdue_days DESC',
-    30000,
-    'NFR-PF-004: 고지서 일괄 생성 1000건 기준 30초 이내'
-);
-
--- 5. 텍스트 검색 성능 테스트
-SELECT execute_performance_test(
-    '임차인_텍스트_검색',
-    'TEXT_SEARCH',
-    'SELECT * FROM tenants 
-     WHERE name ILIKE ''%테스트%'' OR email ILIKE ''%test%'' 
-     ORDER BY name LIMIT 100',
-    1000,
-    '텍스트 검색 성능 (ILIKE 패턴 매칭)'
-);
-
--- 6. 조인 성능 테스트
-SELECT execute_performance_test(
-    '대용량_조인_쿼리',
-    'JOIN_PERFORMANCE',
-    'SELECT b.name, u.unit_number, bm.billing_year, bm.billing_month,
-     i.total_amount, p.payment_date, p.amount
-     FROM buildings b
-     JOIN units u ON b.id = u.building_id
-     JOIN billing_months bm ON b.id = bm.building_id
-     JOIN invoices i ON bm.id = i.billing_month_id AND u.id = i.unit_id
-     LEFT JOIN payments p ON i.id = p.invoice_id
-     WHERE b.name LIKE ''성능테스트빌딩%''
-     ORDER BY b.name, u.unit_number, bm.billing_year DESC, bm.billing_month DESC
-     LIMIT 10000',
-    8000,
-    '대용량 다중 테이블 조인 성능'
-);--
- =====================================================
--- 성능 테스트 결과 분석 및 리포트
+-- =====================================================
+-- 4. 성능 테스트 결과 분석 함수
 -- =====================================================
 
--- 성능 테스트 결과 요약 뷰
-CREATE OR REPLACE VIEW v_performance_test_summary AS
-SELECT 
-    test_category,
-    COUNT(*) as total_tests,
-    COUNT(CASE WHEN performance_grade IN ('A', 'B') THEN 1 END) as passed_tests,
-    COUNT(CASE WHEN performance_grade IN ('D', 'F') THEN 1 END) as failed_tests,
-    ROUND(AVG(execution_time_ms), 2) as avg_execution_time_ms,
-    ROUND(AVG(hit_ratio), 2) as avg_hit_ratio,
-    MAX(test_timestamp) as last_test_time
-FROM performance_test_results
-GROUP BY test_category
-ORDER BY test_category;
-
--- 성능 등급별 분포 뷰
-CREATE OR REPLACE VIEW v_performance_grade_distribution AS
-SELECT 
-    performance_grade,
-    COUNT(*) as test_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as percentage,
-    ROUND(AVG(execution_time_ms), 2) as avg_execution_time,
-    STRING_AGG(DISTINCT test_category, ', ') as categories
-FROM performance_test_results
-GROUP BY performance_grade
-ORDER BY performance_grade;
-
--- 성능 문제 테스트 식별 뷰
-CREATE OR REPLACE VIEW v_performance_issues AS
-SELECT 
-    test_name,
-    test_category,
-    execution_time_ms,
-    performance_grade,
-    hit_ratio,
-    recommendations,
-    test_timestamp
-FROM performance_test_results
-WHERE performance_grade IN ('D', 'F')
-ORDER BY execution_time_ms DESC;
-
--- 성능 개선 추이 분석 함수
-CREATE OR REPLACE FUNCTION analyze_performance_trends(days_back INTEGER DEFAULT 30)
+-- 성능 테스트 결과 요약 함수
+CREATE OR REPLACE FUNCTION analyze_performance_test_results(
+    p_session_id UUID DEFAULT NULL
+)
 RETURNS TABLE (
-    test_name TEXT,
-    test_category TEXT,
-    current_avg_time DECIMAL,
-    previous_avg_time DECIMAL,
-    improvement_pct DECIMAL,
-    trend_status TEXT
-) AS $$
+    category VARCHAR(100),
+    test_count BIGINT,
+    avg_execution_time_ms DECIMAL(10,2),
+    min_execution_time_ms BIGINT,
+    max_execution_time_ms BIGINT,
+    avg_rows_processed DECIMAL(10,2),
+    avg_cache_hit_ratio DECIMAL(5,2),
+    performance_grade CHAR(1)
+) AS $
 BEGIN
     RETURN QUERY
-    WITH current_period AS (
+    SELECT 
+        ptr.test_category,
+        COUNT(*) as test_count,
+        ROUND(AVG(ptr.execution_time_ms), 2) as avg_execution_time_ms,
+        MIN(ptr.execution_time_ms) as min_execution_time_ms,
+        MAX(ptr.execution_time_ms) as max_execution_time_ms,
+        ROUND(AVG(ptr.rows_processed), 2) as avg_rows_processed,
+        ROUND(AVG(ptr.cache_hit_ratio), 2) as avg_cache_hit_ratio,
+        CASE 
+            WHEN AVG(ptr.execution_time_ms) < 100 THEN 'A'
+            WHEN AVG(ptr.execution_time_ms) < 500 THEN 'B'
+            WHEN AVG(ptr.execution_time_ms) < 1000 THEN 'C'
+            WHEN AVG(ptr.execution_time_ms) < 2000 THEN 'D'
+            ELSE 'F'
+        END::CHAR(1) as performance_grade
+    FROM performance_test_results ptr
+    WHERE (p_session_id IS NULL OR ptr.executed_at >= (
+        SELECT started_at FROM performance_test_sessions WHERE session_id = p_session_id
+    ))
+    AND ptr.rows_processed >= 0  -- 실패한 테스트 제외
+    GROUP BY ptr.test_category
+    ORDER BY avg_execution_time_ms;
+END;
+$ LANGUAGE plpgsql;
+
+-- 성능 저하 테스트 식별 함수
+CREATE OR REPLACE FUNCTION identify_slow_tests(
+    p_threshold_ms INTEGER DEFAULT 1000,
+    p_session_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+    test_name VARCHAR(255),
+    test_category VARCHAR(100),
+    execution_time_ms BIGINT,
+    rows_processed INTEGER,
+    cache_hit_ratio DECIMAL(5,2),
+    executed_at TIMESTAMPTZ,
+    performance_impact TEXT
+) AS $
+BEGIN
+    RETURN QUERY
+    SELECT 
+        ptr.test_name,
+        ptr.test_category,
+        ptr.execution_time_ms,
+        ptr.rows_processed,
+        ptr.cache_hit_ratio,
+        ptr.executed_at,
+        CASE 
+            WHEN ptr.execution_time_ms > 5000 THEN 'CRITICAL'
+            WHEN ptr.execution_time_ms > 2000 THEN 'HIGH'
+            WHEN ptr.execution_time_ms > p_threshold_ms THEN 'MEDIUM'
+            ELSE 'LOW'
+        END::TEXT as performance_impact
+    FROM performance_test_results ptr
+    WHERE ptr.execution_time_ms > p_threshold_ms
+    AND ptr.rows_processed >= 0  -- 실패한 테스트 제외
+    AND (p_session_id IS NULL OR ptr.executed_at >= (
+        SELECT started_at FROM performance_test_sessions WHERE session_id = p_session_id
+    ))
+    ORDER BY ptr.execution_time_ms DESC;
+END;
+$ LANGUAGE plpgsql;
+
+-- 성능 트렌드 분석 함수
+CREATE OR REPLACE FUNCTION analyze_performance_trends(
+    p_days INTEGER DEFAULT 30
+)
+RETURNS TABLE (
+    test_date DATE,
+    test_category VARCHAR(100),
+    avg_execution_time_ms DECIMAL(10,2),
+    test_count BIGINT,
+    trend_direction TEXT
+) AS $
+DECLARE
+    trend_query TEXT;
+BEGIN
+    RETURN QUERY
+    WITH daily_stats AS (
         SELECT 
-            ptr.test_name,
+            DATE(ptr.executed_at) as test_date,
             ptr.test_category,
-            AVG(ptr.execution_time_ms) as avg_time
+            ROUND(AVG(ptr.execution_time_ms), 2) as avg_execution_time_ms,
+            COUNT(*) as test_count
         FROM performance_test_results ptr
-        WHERE ptr.test_timestamp >= CURRENT_DATE - (days_back/2 || ' days')::INTERVAL
-        GROUP BY ptr.test_name, ptr.test_category
+        WHERE ptr.executed_at >= CURRENT_DATE - (p_days || ' days')::INTERVAL
+        AND ptr.rows_processed >= 0
+        GROUP BY DATE(ptr.executed_at), ptr.test_category
     ),
-    previous_period AS (
+    trend_analysis AS (
         SELECT 
-            ptr.test_name,
-            ptr.test_category,
-            AVG(ptr.execution_time_ms) as avg_time
-        FROM performance_test_results ptr
-        WHERE ptr.test_timestamp >= CURRENT_DATE - (days_back || ' days')::INTERVAL
-        AND ptr.test_timestamp < CURRENT_DATE - (days_back/2 || ' days')::INTERVAL
-        GROUP BY ptr.test_name, ptr.test_category
+            *,
+            LAG(avg_execution_time_ms) OVER (
+                PARTITION BY test_category 
+                ORDER BY test_date
+            ) as prev_avg_time
+        FROM daily_stats
     )
     SELECT 
-        c.test_name,
-        c.test_category,
-        ROUND(c.avg_time, 2) as current_avg_time,
-        ROUND(COALESCE(p.avg_time, c.avg_time), 2) as previous_avg_time,
-        ROUND(
-            CASE 
-                WHEN p.avg_time IS NULL OR p.avg_time = 0 THEN 0
-                ELSE ((p.avg_time - c.avg_time) / p.avg_time * 100)
-            END, 2
-        ) as improvement_pct,
+        ta.test_date,
+        ta.test_category,
+        ta.avg_execution_time_ms,
+        ta.test_count,
         CASE 
-            WHEN p.avg_time IS NULL THEN 'NEW_TEST'
-            WHEN c.avg_time < p.avg_time * 0.9 THEN 'IMPROVED'
-            WHEN c.avg_time > p.avg_time * 1.1 THEN 'DEGRADED'
+            WHEN ta.prev_avg_time IS NULL THEN 'BASELINE'
+            WHEN ta.avg_execution_time_ms > ta.prev_avg_time * 1.1 THEN 'DEGRADING'
+            WHEN ta.avg_execution_time_ms < ta.prev_avg_time * 0.9 THEN 'IMPROVING'
             ELSE 'STABLE'
-        END as trend_status
-    FROM current_period c
-    LEFT JOIN previous_period p ON c.test_name = p.test_name AND c.test_category = p.test_category
-    ORDER BY improvement_pct DESC;
+        END::TEXT as trend_direction
+    FROM trend_analysis ta
+    ORDER BY ta.test_date DESC, ta.test_category;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
+
+-- =====================================================
+-- 5. 성능 테스트 리포트 생성 함수
+-- =====================================================
 
 -- 성능 테스트 리포트 생성 함수
-CREATE OR REPLACE FUNCTION generate_performance_report()
-RETURNS TEXT AS $$
+CREATE OR REPLACE FUNCTION generate_performance_report(
+    p_session_id UUID
+)
+RETURNS TEXT AS $
 DECLARE
-    report_content TEXT;
-    test_summary RECORD;
-    grade_dist RECORD;
-    issue_count INTEGER;
-    total_tests INTEGER;
-    pass_rate DECIMAL;
+    session_info RECORD;
+    report_text TEXT := '';
+    category_stats RECORD;
+    slow_test RECORD;
 BEGIN
+    -- 세션 정보 조회
+    SELECT * INTO session_info
+    FROM performance_test_sessions
+    WHERE session_id = p_session_id;
+    
+    IF NOT FOUND THEN
+        RETURN 'Session not found: ' || p_session_id;
+    END IF;
+    
     -- 리포트 헤더
-    report_content := E'=======================================================\n';
-    report_content := report_content || '성능 테스트 결과 리포트\n';
-    report_content := report_content || '생성일시: ' || CURRENT_TIMESTAMP || E'\n';
-    report_content := report_content || E'=======================================================\n\n';
+    report_text := report_text || '=====================================' || E'\n';
+    report_text := report_text || 'QIRO 성능 테스트 리포트' || E'\n';
+    report_text := report_text || '=====================================' || E'\n';
+    report_text := report_text || '세션명: ' || session_info.session_name || E'\n';
+    report_text := report_text || '실행일시: ' || session_info.started_at || E'\n';
+    report_text := report_text || '완료일시: ' || COALESCE(session_info.completed_at::TEXT, 'N/A') || E'\n';
+    report_text := report_text || '총 테스트: ' || session_info.total_tests || E'\n';
+    report_text := report_text || '성공: ' || session_info.passed_tests || E'\n';
+    report_text := report_text || '실패: ' || session_info.failed_tests || E'\n';
+    report_text := report_text || E'\n';
     
-    -- 전체 요약
-    SELECT 
-        COUNT(*) as total,
-        COUNT(CASE WHEN performance_grade IN ('A', 'B') THEN 1 END) as passed,
-        ROUND(COUNT(CASE WHEN performance_grade IN ('A', 'B') THEN 1 END) * 100.0 / COUNT(*), 2) as pass_rate
-    INTO total_tests, issue_count, pass_rate
-    FROM performance_test_results;
+    -- 데이터베이스 환경 정보
+    report_text := report_text || '데이터베이스 환경:' || E'\n';
+    report_text := report_text || '- 버전: ' || session_info.database_version || E'\n';
+    report_text := report_text || '- 회사 수: ' || (session_info.test_data_size->>'companies_count') || E'\n';
+    report_text := report_text || '- 사용자 수: ' || (session_info.test_data_size->>'users_count') || E'\n';
+    report_text := report_text || '- 그룹 수: ' || (session_info.test_data_size->>'building_groups_count') || E'\n';
+    report_text := report_text || '- DB 크기: ' || (session_info.test_data_size->>'database_size') || E'\n';
+    report_text := report_text || E'\n';
     
-    report_content := report_content || '1. 전체 요약\n';
-    report_content := report_content || '   - 총 테스트 수: ' || total_tests || E'\n';
-    report_content := report_content || '   - 통과 테스트: ' || issue_count || E'\n';
-    report_content := report_content || '   - 통과율: ' || pass_rate || E'%\n\n';
+    -- 카테고리별 성능 요약
+    report_text := report_text || '카테고리별 성능 요약:' || E'\n';
+    report_text := report_text || '----------------------------------------' || E'\n';
     
-    -- 카테고리별 요약
-    report_content := report_content || '2. 카테고리별 성능 요약\n';
-    FOR test_summary IN 
-        SELECT * FROM v_performance_test_summary
+    FOR category_stats IN 
+        SELECT * FROM analyze_performance_test_results(p_session_id)
     LOOP
-        report_content := report_content || '   [' || test_summary.test_category || ']\n';
-        report_content := report_content || '     - 테스트 수: ' || test_summary.total_tests || E'\n';
-        report_content := report_content || '     - 통과: ' || test_summary.passed_tests || E'\n';
-        report_content := report_content || '     - 실패: ' || test_summary.failed_tests || E'\n';
-        report_content := report_content || '     - 평균 실행시간: ' || test_summary.avg_execution_time_ms || E'ms\n';
-        report_content := report_content || '     - 평균 캐시 히트율: ' || test_summary.avg_hit_ratio || E'%\n\n';
+        report_text := report_text || format(
+            '- %s: %s개 테스트, 평균 %sms, 등급 %s' || E'\n',
+            category_stats.category,
+            category_stats.test_count,
+            category_stats.avg_execution_time_ms,
+            category_stats.performance_grade
+        );
     END LOOP;
     
-    -- 성능 등급 분포
-    report_content := report_content || '3. 성능 등급 분포\n';
-    FOR grade_dist IN 
-        SELECT * FROM v_performance_grade_distribution
+    report_text := report_text || E'\n';
+    
+    -- 느린 테스트 목록
+    report_text := report_text || '성능 개선 필요 테스트:' || E'\n';
+    report_text := report_text || '----------------------------------------' || E'\n';
+    
+    FOR slow_test IN 
+        SELECT * FROM identify_slow_tests(500, p_session_id) LIMIT 10
     LOOP
-        report_content := report_content || '   등급 ' || grade_dist.performance_grade || ': ';
-        report_content := report_content || grade_dist.test_count || '건 (' || grade_dist.percentage || '%)';
-        report_content := report_content || ' - 평균 ' || grade_dist.avg_execution_time || E'ms\n';
+        report_text := report_text || format(
+            '- %s (%s): %sms [%s]' || E'\n',
+            slow_test.test_name,
+            slow_test.test_category,
+            slow_test.execution_time_ms,
+            slow_test.performance_impact
+        );
     END LOOP;
     
-    -- 성능 문제 항목
-    SELECT COUNT(*) INTO issue_count FROM v_performance_issues;
+    report_text := report_text || E'\n';
+    report_text := report_text || '=====================================' || E'\n';
     
-    report_content := report_content || E'\n4. 성능 문제 항목 (' || issue_count || E'건)\n';
-    
-    IF issue_count > 0 THEN
-        FOR test_summary IN 
-            SELECT test_name, execution_time_ms, performance_grade, recommendations
-            FROM v_performance_issues
-            LIMIT 10
-        LOOP
-            report_content := report_content || '   - ' || test_summary.test_name;
-            report_content := report_content || ' (' || test_summary.execution_time_ms || 'ms, ';
-            report_content := report_content || '등급: ' || test_summary.performance_grade || ')\n';
-            report_content := report_content || '     권장사항: ' || test_summary.recommendations || E'\n';
-        END LOOP;
-    ELSE
-        report_content := report_content || '   성능 문제 없음\n';
-    END IF;
-    
-    -- 권장사항
-    report_content := report_content || E'\n5. 전체 권장사항\n';
-    
-    IF pass_rate < 80 THEN
-        report_content := report_content || '   - 전체 통과율이 낮습니다. 인덱스 최적화를 검토하세요.\n';
-    END IF;
-    
-    -- 캐시 히트율 체크
-    SELECT AVG(hit_ratio) INTO pass_rate FROM performance_test_results;
-    IF pass_rate < 90 THEN
-        report_content := report_content || '   - 캐시 히트율이 낮습니다. shared_buffers 설정을 검토하세요.\n';
-    END IF;
-    
-    report_content := report_content || '   - 정기적인 VACUUM ANALYZE 실행을 권장합니다.\n';
-    report_content := report_content || '   - 슬로우 쿼리 로그를 활성화하여 지속적인 모니터링을 하세요.\n';
-    
-    report_content := report_content || E'\n=======================================================\n';
-    
-    RETURN report_content;
+    RETURN report_text;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 성능 최적화 권장사항 생성
+-- 6. 자동화된 성능 테스트 스케줄링
 -- =====================================================
 
--- 최적화 권장사항 생성 함수
-CREATE OR REPLACE FUNCTION generate_optimization_recommendations()
-RETURNS TABLE (
-    priority INTEGER,
-    category TEXT,
-    issue TEXT,
-    recommendation TEXT,
-    estimated_impact TEXT
-) AS $$
+-- 일일 성능 테스트 실행 함수
+CREATE OR REPLACE FUNCTION run_daily_performance_test()
+RETURNS UUID AS $
+DECLARE
+    session_id UUID;
 BEGIN
-    -- 1. 심각한 성능 문제 (F등급)
-    RETURN QUERY
-    SELECT 
-        1 as priority,
-        'CRITICAL' as category,
-        'F등급 성능 테스트: ' || test_name as issue,
-        '즉시 쿼리 최적화 및 인덱스 검토 필요' as recommendation,
-        'HIGH' as estimated_impact
-    FROM performance_test_results
-    WHERE performance_grade = 'F'
-    ORDER BY execution_time_ms DESC;
+    session_id := run_comprehensive_performance_test();
     
-    -- 2. 캐시 히트율 문제
-    RETURN QUERY
-    SELECT 
-        2 as priority,
-        'MEMORY' as category,
-        '낮은 캐시 히트율: ' || test_name || ' (' || hit_ratio || '%)' as issue,
-        'shared_buffers 증가 또는 쿼리 최적화 검토' as recommendation,
-        'MEDIUM' as estimated_impact
-    FROM performance_test_results
-    WHERE hit_ratio < 80
-    ORDER BY hit_ratio ASC;
+    -- 결과를 로그 테이블에 저장
+    INSERT INTO maintenance_log (job_type, job_result, executed_at)
+    VALUES (
+        'daily_performance_test',
+        generate_performance_report(session_id),
+        now()
+    );
     
-    -- 3. 인덱스 사용률 문제
-    RETURN QUERY
-    SELECT 
-        3 as priority,
-        'INDEX' as category,
-        '미사용 인덱스: ' || indexname as issue,
-        '인덱스 삭제 검토 (저장공간 절약)' as recommendation,
-        'LOW' as estimated_impact
-    FROM pg_stat_user_indexes
-    WHERE schemaname = 'public' AND idx_scan = 0
-    ORDER BY pg_relation_size(indexrelid) DESC;
-    
-    -- 4. 테이블 크기 문제
-    RETURN QUERY
-    SELECT 
-        4 as priority,
-        'STORAGE' as category,
-        '대용량 테이블: ' || tablename || ' (' || pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) || ')' as issue,
-        '파티셔닝 또는 아카이빙 검토' as recommendation,
-        'MEDIUM' as estimated_impact
-    FROM pg_stat_user_tables
-    WHERE schemaname = 'public' 
-    AND pg_total_relation_size(schemaname||'.'||tablename) > 1073741824  -- 1GB
-    ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
-    
+    RETURN session_id;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 성능 테스트 결과 출력
+-- 7. 인덱스 생성 및 코멘트
 -- =====================================================
 
--- 성능 테스트 요약 출력
-\echo '====================================================='
-\echo '성능 테스트 결과 요약'
-\echo '====================================================='
+-- 성능 테스트 결과 테이블 인덱스
+CREATE INDEX IF NOT EXISTS idx_performance_test_results_executed_at 
+ON performance_test_results(executed_at DESC);
 
-SELECT * FROM v_performance_test_summary;
+CREATE INDEX IF NOT EXISTS idx_performance_test_results_category 
+ON performance_test_results(test_category);
 
-\echo ''
-\echo '성능 등급 분포:'
-SELECT * FROM v_performance_grade_distribution;
+CREATE INDEX IF NOT EXISTS idx_performance_test_results_execution_time 
+ON performance_test_results(execution_time_ms DESC);
 
-\echo ''
-\echo '성능 문제 항목:'
-SELECT test_name, execution_time_ms, performance_grade, recommendations 
-FROM v_performance_issues;
+-- 성능 테스트 세션 테이블 인덱스
+CREATE INDEX IF NOT EXISTS idx_performance_test_sessions_started_at 
+ON performance_test_sessions(started_at DESC);
 
-\echo ''
-\echo '최적화 권장사항:'
-SELECT priority, category, issue, recommendation, estimated_impact 
-FROM generate_optimization_recommendations() 
-ORDER BY priority, estimated_impact DESC;
+CREATE INDEX IF NOT EXISTS idx_performance_test_sessions_status 
+ON performance_test_sessions(session_status);
 
--- 전체 성능 리포트 생성
-\echo ''
-\echo '====================================================='
-\echo '전체 성능 리포트'
-\echo '====================================================='
-SELECT generate_performance_report();
+-- =====================================================
+-- 8. 코멘트 추가
+-- =====================================================
 
-\echo ''
-\echo '====================================================='
-\echo '성능 테스트 및 최적화 완료'
-\echo '====================================================='
-\echo '다음 명령어로 추가 분석 가능:'
-\echo '- SELECT * FROM analyze_performance_trends(30);'
-\echo '- SELECT generate_performance_report();'
-\echo '- SELECT * FROM generate_optimization_recommendations();'
-\echo '====================================================='
+COMMENT ON TABLE performance_test_results IS '성능 테스트 실행 결과 저장 테이블';
+COMMENT ON TABLE performance_test_sessions IS '성능 테스트 세션 정보 테이블';
+
+COMMENT ON FUNCTION start_performance_test_session(VARCHAR, TEXT) IS '성능 테스트 세션 시작';
+COMMENT ON FUNCTION execute_performance_test(UUID, VARCHAR, VARCHAR, TEXT, JSONB) IS '개별 성능 테스트 실행';
+COMMENT ON FUNCTION complete_performance_test_session(UUID) IS '성능 테스트 세션 완료';
+COMMENT ON FUNCTION run_comprehensive_performance_test() IS '종합 성능 테스트 실행';
+COMMENT ON FUNCTION analyze_performance_test_results(UUID) IS '성능 테스트 결과 분석';
+COMMENT ON FUNCTION identify_slow_tests(INTEGER, UUID) IS '느린 테스트 식별';
+COMMENT ON FUNCTION analyze_performance_trends(INTEGER) IS '성능 트렌드 분석';
+COMMENT ON FUNCTION generate_performance_report(UUID) IS '성능 테스트 리포트 생성';
+COMMENT ON FUNCTION run_daily_performance_test() IS '일일 성능 테스트 실행 (스케줄러용)';
+
+-- =====================================================
+-- 9. 사용법 안내
+-- =====================================================
+
+DO $
+BEGIN
+    RAISE NOTICE '성능 테스트 실행 시스템이 준비되었습니다.';
+    RAISE NOTICE '종합 성능 테스트 실행: SELECT run_comprehensive_performance_test();';
+    RAISE NOTICE '결과 분석: SELECT * FROM analyze_performance_test_results();';
+    RAISE NOTICE '느린 테스트 확인: SELECT * FROM identify_slow_tests();';
+    RAISE NOTICE '성능 트렌드 분석: SELECT * FROM analyze_performance_trends();';
+END
+$;

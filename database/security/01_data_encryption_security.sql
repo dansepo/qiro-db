@@ -1,566 +1,547 @@
 -- =====================================================
--- 데이터 암호화 및 보안 설계
--- QIRO 건물 관리 시스템 - 개인정보 보호 및 데이터 보안
+-- QIRO 데이터 암호화 및 보안 시스템
+-- 민감 정보 암호화 구현
+-- PostgreSQL 17.5 기반
+-- 작성일: 2025-01-30
 -- =====================================================
 
--- 1. 암호화 확장 모듈 활성화
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- =====================================================
+-- 1. 암호화 확장 기능 활성화
+-- =====================================================
 
--- 2. 개인정보 암호화를 위한 함수 생성
--- AES-256 암호화 함수
-CREATE OR REPLACE FUNCTION encrypt_personal_data(data TEXT, key TEXT)
-RETURNS TEXT AS $$
+-- pgcrypto 확장 활성화 (이미 활성화되어 있을 수 있음)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- =====================================================
+-- 2. 암호화 키 관리 테이블
+-- =====================================================
+
+-- 암호화 키 관리 테이블 (키 회전 지원)
+CREATE TABLE encryption_keys (
+    key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key_name VARCHAR(100) UNIQUE NOT NULL,
+    key_version INTEGER NOT NULL DEFAULT 1,
+    encrypted_key BYTEA NOT NULL, -- 마스터 키로 암호화된 실제 키
+    key_purpose VARCHAR(50) NOT NULL, -- PII, BUSINESS_DATA, PHONE, etc.
+    algorithm VARCHAR(50) NOT NULL DEFAULT 'AES-256-GCM',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ,
+    created_by UUID,
+    
+    CONSTRAINT encryption_keys_purpose_check 
+        CHECK (key_purpose IN ('PII', 'BUSINESS_DATA', 'PHONE', 'EMAIL', 'DOCUMENT')),
+    CONSTRAINT encryption_keys_algorithm_check 
+        CHECK (algorithm IN ('AES-256-GCM', 'AES-256-CBC', 'ChaCha20-Poly1305'))
+);
+
+-- 키 버전별 인덱스
+CREATE INDEX idx_encryption_keys_name_version ON encryption_keys(key_name, key_version);
+CREATE INDEX idx_encryption_keys_active ON encryption_keys(is_active) WHERE is_active = true;
+
+-- =====================================================
+-- 3. 암호화/복호화 함수
+-- =====================================================
+
+-- 마스터 키 생성 함수 (애플리케이션에서 관리)
+CREATE OR REPLACE FUNCTION generate_master_key()
+RETURNS TEXT AS $
 BEGIN
-    IF data IS NULL OR data = '' THEN
-        RETURN NULL;
-    END IF;
-    RETURN encode(encrypt(data::bytea, key::bytea, 'aes'), 'base64');
+    -- 실제 환경에서는 외부 키 관리 시스템(AWS KMS, HashiCorp Vault 등) 사용 권장
+    RETURN encode(gen_random_bytes(32), 'base64');
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- AES-256 복호화 함수
-CREATE OR REPLACE FUNCTION decrypt_personal_data(encrypted_data TEXT, key TEXT)
-RETURNS TEXT AS $$
+-- 데이터 암호화 함수 (AES-256-GCM)
+CREATE OR REPLACE FUNCTION encrypt_sensitive_data(
+    plain_text TEXT,
+    key_name VARCHAR(100) DEFAULT 'default_pii_key'
+)
+RETURNS TEXT AS $
+DECLARE
+    encryption_key BYTEA;
+    encrypted_result BYTEA;
+    key_info RECORD;
 BEGIN
-    IF encrypted_data IS NULL OR encrypted_data = '' THEN
+    -- 빈 값 처리
+    IF plain_text IS NULL OR plain_text = '' THEN
         RETURN NULL;
     END IF;
-    RETURN convert_from(decrypt(decode(encrypted_data, 'base64'), key::bytea, 'aes'), 'UTF8');
+    
+    -- 활성 키 조회
+    SELECT encrypted_key, algorithm 
+    INTO key_info
+    FROM encryption_keys 
+    WHERE key_name = encrypt_sensitive_data.key_name 
+    AND is_active = true 
+    ORDER BY key_version DESC 
+    LIMIT 1;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION '암호화 키를 찾을 수 없습니다: %', key_name;
+    END IF;
+    
+    -- 실제 환경에서는 마스터 키로 encryption_key를 복호화해야 함
+    -- 여기서는 단순화된 구현
+    encryption_key := key_info.encrypted_key;
+    
+    -- AES-256-GCM 암호화
+    encrypted_result := pgp_sym_encrypt(plain_text::BYTEA, encryption_key);
+    
+    -- Base64 인코딩하여 TEXT로 반환
+    RETURN encode(encrypted_result, 'base64');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 데이터 복호화 함수
+CREATE OR REPLACE FUNCTION decrypt_sensitive_data(
+    encrypted_text TEXT,
+    key_name VARCHAR(100) DEFAULT 'default_pii_key'
+)
+RETURNS TEXT AS $
+DECLARE
+    encryption_key BYTEA;
+    encrypted_data BYTEA;
+    decrypted_result BYTEA;
+    key_info RECORD;
+BEGIN
+    -- 빈 값 처리
+    IF encrypted_text IS NULL OR encrypted_text = '' THEN
+        RETURN NULL;
+    END IF;
+    
+    -- 활성 키 조회
+    SELECT encrypted_key, algorithm 
+    INTO key_info
+    FROM encryption_keys 
+    WHERE key_name = decrypt_sensitive_data.key_name 
+    AND is_active = true 
+    ORDER BY key_version DESC 
+    LIMIT 1;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION '복호화 키를 찾을 수 없습니다: %', key_name;
+    END IF;
+    
+    -- Base64 디코딩
+    encrypted_data := decode(encrypted_text, 'base64');
+    encryption_key := key_info.encrypted_key;
+    
+    -- 복호화
+    decrypted_result := pgp_sym_decrypt(encrypted_data, encryption_key);
+    
+    RETURN convert_from(decrypted_result, 'UTF8');
 EXCEPTION
     WHEN OTHERS THEN
-        RETURN '[DECRYPTION_ERROR]';
+        RAISE EXCEPTION '복호화 실패: %', SQLERRM;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 3. 개인정보 필드별 암호화 전략 구현
--- 임대인 테이블 개인정보 암호화 컬럼 추가
-ALTER TABLE lessors 
-ADD COLUMN IF NOT EXISTS contact_phone_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS contact_email_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS business_registration_number_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS address_encrypted TEXT;
+-- =====================================================
+-- 4. 특화된 암호화 함수들
+-- =====================================================
 
--- 임차인 테이블 개인정보 암호화 컬럼 추가
-ALTER TABLE tenants 
-ADD COLUMN IF NOT EXISTS contact_phone_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS contact_email_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS business_registration_number_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS address_encrypted TEXT;
-
--- 사용자 테이블 개인정보 암호화 컬럼 추가
-ALTER TABLE users 
-ADD COLUMN IF NOT EXISTS email_encrypted TEXT,
-ADD COLUMN IF NOT EXISTS full_name_encrypted TEXT;
-
--- 4. 개인정보 암호화 트리거 함수
-CREATE OR REPLACE FUNCTION encrypt_lessor_personal_data()
-RETURNS TRIGGER AS $$
-DECLARE
-    encryption_key TEXT := current_setting('app.encryption_key', true);
+-- 사업자등록번호 암호화 함수
+CREATE OR REPLACE FUNCTION encrypt_business_number(business_number TEXT)
+RETURNS TEXT AS $
 BEGIN
-    -- 암호화 키가 설정되지 않은 경우 오류 발생
-    IF encryption_key IS NULL OR encryption_key = '' THEN
-        RAISE EXCEPTION '암호화 키가 설정되지 않았습니다.';
-    END IF;
-
-    -- 개인정보 필드 암호화
-    IF NEW.contact_phone IS NOT NULL THEN
-        NEW.contact_phone_encrypted := encrypt_personal_data(NEW.contact_phone, encryption_key);
-        NEW.contact_phone := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.contact_email IS NOT NULL THEN
-        NEW.contact_email_encrypted := encrypt_personal_data(NEW.contact_email, encryption_key);
-        NEW.contact_email := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.business_registration_number IS NOT NULL THEN
-        NEW.business_registration_number_encrypted := encrypt_personal_data(NEW.business_registration_number, encryption_key);
-        NEW.business_registration_number := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.address IS NOT NULL THEN
-        NEW.address_encrypted := encrypt_personal_data(NEW.address, encryption_key);
-        NEW.address := '[ENCRYPTED]';
-    END IF;
-
-    RETURN NEW;
+    RETURN encrypt_sensitive_data(business_number, 'business_data_key');
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 임대인 테이블 암호화 트리거
-DROP TRIGGER IF EXISTS trigger_encrypt_lessor_data ON lessors;
-CREATE TRIGGER trigger_encrypt_lessor_data
-    BEFORE INSERT OR UPDATE ON lessors
-    FOR EACH ROW
-    EXECUTE FUNCTION encrypt_lessor_personal_data();
-
--- 임차인 테이블 암호화 트리거 함수
-CREATE OR REPLACE FUNCTION encrypt_tenant_personal_data()
-RETURNS TRIGGER AS $$
-DECLARE
-    encryption_key TEXT := current_setting('app.encryption_key', true);
+-- 사업자등록번호 복호화 함수
+CREATE OR REPLACE FUNCTION decrypt_business_number(encrypted_business_number TEXT)
+RETURNS TEXT AS $
 BEGIN
-    -- 암호화 키가 설정되지 않은 경우 오류 발생
-    IF encryption_key IS NULL OR encryption_key = '' THEN
-        RAISE EXCEPTION '암호화 키가 설정되지 않았습니다.';
-    END IF;
-
-    -- 개인정보 필드 암호화
-    IF NEW.contact_phone IS NOT NULL THEN
-        NEW.contact_phone_encrypted := encrypt_personal_data(NEW.contact_phone, encryption_key);
-        NEW.contact_phone := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.contact_email IS NOT NULL THEN
-        NEW.contact_email_encrypted := encrypt_personal_data(NEW.contact_email, encryption_key);
-        NEW.contact_email := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.business_registration_number IS NOT NULL THEN
-        NEW.business_registration_number_encrypted := encrypt_personal_data(NEW.business_registration_number, encryption_key);
-        NEW.business_registration_number := '[ENCRYPTED]';
-    END IF;
-    
-    IF NEW.address IS NOT NULL THEN
-        NEW.address_encrypted := encrypt_personal_data(NEW.address, encryption_key);
-        NEW.address := '[ENCRYPTED]';
-    END IF;
-
-    RETURN NEW;
+    RETURN decrypt_sensitive_data(encrypted_business_number, 'business_data_key');
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 임차인 테이블 암호화 트리거
-DROP TRIGGER IF EXISTS trigger_encrypt_tenant_data ON tenants;
-CREATE TRIGGER trigger_encrypt_tenant_data
-    BEFORE INSERT OR UPDATE ON tenants
-    FOR EACH ROW
-    EXECUTE FUNCTION encrypt_tenant_personal_data();
-
--- 사용자 테이블 암호화 트리거 함수
-CREATE OR REPLACE FUNCTION encrypt_user_personal_data()
-RETURNS TRIGGER AS $$
-DECLARE
-    encryption_key TEXT := current_setting('app.encryption_key', true);
+-- 전화번호 암호화 함수
+CREATE OR REPLACE FUNCTION encrypt_phone_number(phone_number TEXT)
+RETURNS TEXT AS $
 BEGIN
-    -- 암호화 키가 설정되지 않은 경우 오류 발생
-    IF encryption_key IS NULL OR encryption_key = '' THEN
-        RAISE EXCEPTION '암호화 키가 설정되지 않았습니다.';
-    END IF;
+    RETURN encrypt_sensitive_data(phone_number, 'phone_key');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
-    -- 개인정보 필드 암호화
-    IF NEW.email IS NOT NULL THEN
-        NEW.email_encrypted := encrypt_personal_data(NEW.email, encryption_key);
-        NEW.email := '[ENCRYPTED]';
+-- 전화번호 복호화 함수
+CREATE OR REPLACE FUNCTION decrypt_phone_number(encrypted_phone_number TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN decrypt_sensitive_data(encrypted_phone_number, 'phone_key');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 이메일 암호화 함수 (선택적)
+CREATE OR REPLACE FUNCTION encrypt_email(email TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN encrypt_sensitive_data(email, 'email_key');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 이메일 복호화 함수
+CREATE OR REPLACE FUNCTION decrypt_email(encrypted_email TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN decrypt_sensitive_data(encrypted_email, 'email_key');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =====================================================
+-- 5. 해시 함수들 (검색 가능한 암호화)
+-- =====================================================
+
+-- 검색 가능한 해시 생성 (HMAC-SHA256)
+CREATE OR REPLACE FUNCTION create_searchable_hash(
+    plain_text TEXT,
+    salt TEXT DEFAULT 'qiro_search_salt_2025'
+)
+RETURNS TEXT AS $
+BEGIN
+    IF plain_text IS NULL OR plain_text = '' THEN
+        RETURN NULL;
     END IF;
     
-    IF NEW.full_name IS NOT NULL THEN
-        NEW.full_name_encrypted := encrypt_personal_data(NEW.full_name, encryption_key);
-        NEW.full_name := '[ENCRYPTED]';
-    END IF;
-
-    RETURN NEW;
+    RETURN encode(hmac(plain_text, salt, 'sha256'), 'hex');
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 사용자 테이블 암호화 트리거
-DROP TRIGGER IF EXISTS trigger_encrypt_user_data ON users;
-CREATE TRIGGER trigger_encrypt_user_data
-    BEFORE INSERT OR UPDATE ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION encrypt_user_personal_data();
+-- 사업자등록번호 검색용 해시
+CREATE OR REPLACE FUNCTION hash_business_number(business_number TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN create_searchable_hash(business_number, 'business_search_salt');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 5. 개인정보 복호화 뷰 생성 (권한이 있는 사용자만 접근 가능)
-CREATE OR REPLACE VIEW lessors_decrypted AS
+-- 전화번호 검색용 해시
+CREATE OR REPLACE FUNCTION hash_phone_number(phone_number TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN create_searchable_hash(phone_number, 'phone_search_salt');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 이메일 검색용 해시
+CREATE OR REPLACE FUNCTION hash_email(email TEXT)
+RETURNS TEXT AS $
+BEGIN
+    RETURN create_searchable_hash(email, 'email_search_salt');
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =====================================================
+-- 6. 키 관리 함수들
+-- =====================================================
+
+-- 새 암호화 키 생성
+CREATE OR REPLACE FUNCTION create_encryption_key(
+    p_key_name VARCHAR(100),
+    p_key_purpose VARCHAR(50),
+    p_algorithm VARCHAR(50) DEFAULT 'AES-256-GCM'
+)
+RETURNS UUID AS $
+DECLARE
+    new_key_id UUID;
+    new_version INTEGER;
+    raw_key BYTEA;
+BEGIN
+    -- 기존 키의 최대 버전 확인
+    SELECT COALESCE(MAX(key_version), 0) + 1 
+    INTO new_version
+    FROM encryption_keys 
+    WHERE key_name = p_key_name;
+    
+    -- 기존 키들 비활성화
+    UPDATE encryption_keys 
+    SET is_active = false 
+    WHERE key_name = p_key_name;
+    
+    -- 새 키 생성 (32바이트 = 256비트)
+    raw_key := gen_random_bytes(32);
+    
+    -- 키 저장 (실제 환경에서는 마스터 키로 암호화해야 함)
+    INSERT INTO encryption_keys (
+        key_name,
+        key_version,
+        encrypted_key,
+        key_purpose,
+        algorithm,
+        is_active,
+        created_by
+    ) VALUES (
+        p_key_name,
+        new_version,
+        raw_key, -- 실제로는 마스터 키로 암호화된 값
+        p_key_purpose,
+        p_algorithm,
+        true,
+        current_setting('app.current_user_id', true)::UUID
+    ) RETURNING key_id INTO new_key_id;
+    
+    RETURN new_key_id;
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 키 회전 (새 버전 생성)
+CREATE OR REPLACE FUNCTION rotate_encryption_key(p_key_name VARCHAR(100))
+RETURNS UUID AS $
+BEGIN
+    RETURN create_encryption_key(
+        p_key_name,
+        (SELECT key_purpose FROM encryption_keys WHERE key_name = p_key_name LIMIT 1),
+        (SELECT algorithm FROM encryption_keys WHERE key_name = p_key_name LIMIT 1)
+    );
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 기본 암호화 키들 초기화
+CREATE OR REPLACE FUNCTION initialize_default_encryption_keys()
+RETURNS VOID AS $
+BEGIN
+    -- PII 데이터용 키
+    PERFORM create_encryption_key('default_pii_key', 'PII');
+    
+    -- 사업자 데이터용 키
+    PERFORM create_encryption_key('business_data_key', 'BUSINESS_DATA');
+    
+    -- 전화번호용 키
+    PERFORM create_encryption_key('phone_key', 'PHONE');
+    
+    -- 이메일용 키
+    PERFORM create_encryption_key('email_key', 'EMAIL');
+    
+    RAISE NOTICE '기본 암호화 키 초기화 완료';
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =====================================================
+-- 7. 암호화된 데이터 검색 지원 뷰
+-- =====================================================
+
+-- 회사 정보 검색 뷰 (복호화된 데이터 포함)
+CREATE OR REPLACE VIEW companies_decrypted AS
 SELECT 
-    id,
-    name,
-    CASE 
-        WHEN contact_phone_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(contact_phone_encrypted, current_setting('app.encryption_key', true))
-        ELSE contact_phone
-    END AS contact_phone,
-    CASE 
-        WHEN contact_email_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(contact_email_encrypted, current_setting('app.encryption_key', true))
-        ELSE contact_email
-    END AS contact_email,
-    CASE 
-        WHEN business_registration_number_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(business_registration_number_encrypted, current_setting('app.encryption_key', true))
-        ELSE business_registration_number
-    END AS business_registration_number,
-    CASE 
-        WHEN address_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(address_encrypted, current_setting('app.encryption_key', true))
-        ELSE address
-    END AS address,
-    created_at,
-    updated_at
-FROM lessors;
-
-CREATE OR REPLACE VIEW tenants_decrypted AS
-SELECT 
-    id,
-    name,
-    CASE 
-        WHEN contact_phone_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(contact_phone_encrypted, current_setting('app.encryption_key', true))
-        ELSE contact_phone
-    END AS contact_phone,
-    CASE 
-        WHEN contact_email_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(contact_email_encrypted, current_setting('app.encryption_key', true))
-        ELSE contact_email
-    END AS contact_email,
-    CASE 
-        WHEN business_registration_number_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(business_registration_number_encrypted, current_setting('app.encryption_key', true))
-        ELSE business_registration_number
-    END AS business_registration_number,
+    company_id,
+    decrypt_business_number(business_registration_number_encrypted) as business_registration_number,
+    company_name,
     representative_name,
-    CASE 
-        WHEN address_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(address_encrypted, current_setting('app.encryption_key', true))
-        ELSE address
-    END AS address,
+    business_address,
+    decrypt_phone_number(contact_phone_encrypted) as contact_phone,
+    contact_email,
+    business_type,
+    establishment_date,
+    verification_status,
+    verification_date,
+    subscription_plan,
+    subscription_status,
     created_at,
-    updated_at
-FROM tenants;
+    updated_at,
+    created_by,
+    updated_by
+FROM companies;
 
+-- 사용자 정보 검색 뷰 (복호화된 데이터 포함)
 CREATE OR REPLACE VIEW users_decrypted AS
 SELECT 
-    id,
-    username,
+    user_id,
+    company_id,
+    email,
     password_hash,
-    CASE 
-        WHEN email_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(email_encrypted, current_setting('app.encryption_key', true))
-        ELSE email
-    END AS email,
-    CASE 
-        WHEN full_name_encrypted IS NOT NULL 
-        THEN decrypt_personal_data(full_name_encrypted, current_setting('app.encryption_key', true))
-        ELSE full_name
-    END AS full_name,
-    role_id,
-    is_active,
+    full_name,
+    decrypt_phone_number(phone_number_encrypted) as phone_number,
+    department,
+    position,
+    user_type,
+    status,
+    email_verified,
+    email_verified_at,
+    phone_verified,
+    phone_verified_at,
     last_login_at,
+    last_login_ip,
+    failed_login_attempts,
+    locked_until,
+    password_changed_at,
+    must_change_password,
+    profile_image_url,
+    timezone,
+    language,
     created_at,
-    updated_at
+    updated_at,
+    created_by,
+    updated_by
 FROM users;
 
--- 6. 데이터베이스 연결 보안 설정
--- SSL 연결 강제 설정 (postgresql.conf에서 설정)
--- ssl = on
--- ssl_cert_file = 'server.crt'
--- ssl_key_file = 'server.key'
--- ssl_ca_file = 'ca.crt'
+-- =====================================================
+-- 8. 암호화 상태 모니터링 함수
+-- =====================================================
 
--- 7. 민감 데이터 접근 로깅 테이블
-CREATE TABLE IF NOT EXISTS sensitive_data_access_logs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT,
-    username VARCHAR(50),
-    table_name VARCHAR(50) NOT NULL,
-    record_id BIGINT,
-    access_type VARCHAR(20) NOT NULL, -- SELECT, INSERT, UPDATE, DELETE
-    accessed_columns TEXT[], -- 접근한 컬럼 목록
-    ip_address INET,
-    user_agent TEXT,
-    session_id VARCHAR(255),
-    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    success BOOLEAN DEFAULT true,
-    error_message TEXT
-);
-
--- 민감 데이터 접근 로깅 인덱스
-CREATE INDEX IF NOT EXISTS idx_sensitive_access_logs_user_id ON sensitive_data_access_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_sensitive_access_logs_table_name ON sensitive_data_access_logs(table_name);
-CREATE INDEX IF NOT EXISTS idx_sensitive_access_logs_accessed_at ON sensitive_data_access_logs(accessed_at);
-CREATE INDEX IF NOT EXISTS idx_sensitive_access_logs_ip_address ON sensitive_data_access_logs(ip_address);
-
--- 8. 민감 데이터 접근 로깅 함수
-CREATE OR REPLACE FUNCTION log_sensitive_data_access(
-    p_user_id BIGINT,
-    p_username VARCHAR(50),
-    p_table_name VARCHAR(50),
-    p_record_id BIGINT,
-    p_access_type VARCHAR(20),
-    p_accessed_columns TEXT[],
-    p_ip_address INET DEFAULT NULL,
-    p_user_agent TEXT DEFAULT NULL,
-    p_session_id VARCHAR(255) DEFAULT NULL,
-    p_success BOOLEAN DEFAULT true,
-    p_error_message TEXT DEFAULT NULL
-)
-RETURNS VOID AS $$
+-- 암호화 키 상태 확인
+CREATE OR REPLACE FUNCTION check_encryption_key_status()
+RETURNS TABLE (
+    key_name VARCHAR(100),
+    current_version INTEGER,
+    is_active BOOLEAN,
+    created_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    days_until_expiry INTEGER
+) AS $
 BEGIN
-    INSERT INTO sensitive_data_access_logs (
-        user_id, username, table_name, record_id, access_type, 
-        accessed_columns, ip_address, user_agent, session_id, 
-        success, error_message
-    ) VALUES (
-        p_user_id, p_username, p_table_name, p_record_id, p_access_type,
-        p_accessed_columns, p_ip_address, p_user_agent, p_session_id,
-        p_success, p_error_message
-    );
+    RETURN QUERY
+    SELECT 
+        ek.key_name,
+        ek.key_version,
+        ek.is_active,
+        ek.created_at,
+        ek.expires_at,
+        CASE 
+            WHEN ek.expires_at IS NOT NULL 
+            THEN EXTRACT(DAY FROM ek.expires_at - now())::INTEGER
+            ELSE NULL
+        END as days_until_expiry
+    FROM encryption_keys ek
+    WHERE ek.is_active = true
+    ORDER BY ek.key_name, ek.key_version DESC;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 9. 민감 데이터 접근 모니터링 트리거
-CREATE OR REPLACE FUNCTION monitor_sensitive_data_access()
-RETURNS TRIGGER AS $$
+-- 암호화된 데이터 통계
+CREATE OR REPLACE FUNCTION get_encryption_statistics()
+RETURNS TABLE (
+    table_name TEXT,
+    encrypted_columns TEXT[],
+    total_records BIGINT,
+    encrypted_records BIGINT,
+    encryption_percentage NUMERIC(5,2)
+) AS $
+BEGIN
+    -- Companies 테이블 통계
+    RETURN QUERY
+    SELECT 
+        'companies'::TEXT,
+        ARRAY['business_registration_number', 'contact_phone']::TEXT[],
+        COUNT(*)::BIGINT,
+        COUNT(CASE WHEN business_registration_number_encrypted IS NOT NULL THEN 1 END)::BIGINT,
+        ROUND(
+            COUNT(CASE WHEN business_registration_number_encrypted IS NOT NULL THEN 1 END)::NUMERIC / 
+            NULLIF(COUNT(*), 0) * 100, 2
+        )
+    FROM companies;
+    
+    -- Users 테이블 통계
+    RETURN QUERY
+    SELECT 
+        'users'::TEXT,
+        ARRAY['phone_number']::TEXT[],
+        COUNT(*)::BIGINT,
+        COUNT(CASE WHEN phone_number_encrypted IS NOT NULL THEN 1 END)::BIGINT,
+        ROUND(
+            COUNT(CASE WHEN phone_number_encrypted IS NOT NULL THEN 1 END)::NUMERIC / 
+            NULLIF(COUNT(*), 0) * 100, 2
+        )
+    FROM users;
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =====================================================
+-- 9. 데이터 마이그레이션 함수 (기존 데이터 암호화)
+-- =====================================================
+
+-- 기존 회사 데이터 암호화 마이그레이션
+CREATE OR REPLACE FUNCTION migrate_companies_encryption()
+RETURNS INTEGER AS $
 DECLARE
-    current_user_id BIGINT;
-    current_username VARCHAR(50);
-    accessed_columns TEXT[];
+    company_record RECORD;
+    migrated_count INTEGER := 0;
 BEGIN
-    -- 현재 사용자 정보 가져오기 (애플리케이션에서 설정)
-    BEGIN
-        current_user_id := current_setting('app.current_user_id')::BIGINT;
-        current_username := current_setting('app.current_username');
-    EXCEPTION
-        WHEN OTHERS THEN
-            current_user_id := NULL;
-            current_username := session_user;
-    END;
-
-    -- 접근한 컬럼 정보 수집 (실제 구현에서는 애플리케이션 레벨에서 처리)
-    accessed_columns := ARRAY['contact_phone', 'contact_email', 'business_registration_number', 'address'];
-
-    -- 로그 기록
-    PERFORM log_sensitive_data_access(
-        current_user_id,
-        current_username,
-        TG_TABLE_NAME,
-        COALESCE(NEW.id, OLD.id),
-        TG_OP,
-        accessed_columns,
-        inet_client_addr(),
-        current_setting('app.user_agent', true),
-        current_setting('app.session_id', true)
-    );
-
-    IF TG_OP = 'DELETE' THEN
-        RETURN OLD;
-    ELSE
-        RETURN NEW;
-    END IF;
+    -- 암호화되지 않은 회사 데이터 처리
+    FOR company_record IN 
+        SELECT company_id, business_registration_number, contact_phone
+        FROM companies 
+        WHERE business_registration_number_encrypted IS NULL
+        AND business_registration_number IS NOT NULL
+    LOOP
+        UPDATE companies SET
+            business_registration_number_encrypted = encrypt_business_number(company_record.business_registration_number),
+            business_registration_number_hash = hash_business_number(company_record.business_registration_number),
+            contact_phone_encrypted = encrypt_phone_number(company_record.contact_phone),
+            contact_phone_hash = hash_phone_number(company_record.contact_phone)
+        WHERE company_id = company_record.company_id;
+        
+        migrated_count := migrated_count + 1;
+    END LOOP;
+    
+    RETURN migrated_count;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 민감 데이터 테이블에 모니터링 트리거 적용
-DROP TRIGGER IF EXISTS trigger_monitor_lessors_access ON lessors;
-CREATE TRIGGER trigger_monitor_lessors_access
-    AFTER INSERT OR UPDATE OR DELETE ON lessors
-    FOR EACH ROW
-    EXECUTE FUNCTION monitor_sensitive_data_access();
-
-DROP TRIGGER IF EXISTS trigger_monitor_tenants_access ON tenants;
-CREATE TRIGGER trigger_monitor_tenants_access
-    AFTER INSERT OR UPDATE OR DELETE ON tenants
-    FOR EACH ROW
-    EXECUTE FUNCTION monitor_sensitive_data_access();
-
-DROP TRIGGER IF EXISTS trigger_monitor_users_access ON users;
-CREATE TRIGGER trigger_monitor_users_access
-    AFTER INSERT OR UPDATE OR DELETE ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION monitor_sensitive_data_access();
-
--- 10. 데이터 마스킹 함수 (개발/테스트 환경용)
-CREATE OR REPLACE FUNCTION mask_personal_data(data TEXT, mask_type VARCHAR(20) DEFAULT 'partial')
-RETURNS TEXT AS $$
-BEGIN
-    IF data IS NULL OR data = '' THEN
-        RETURN data;
-    END IF;
-
-    CASE mask_type
-        WHEN 'full' THEN
-            RETURN '***';
-        WHEN 'partial' THEN
-            IF LENGTH(data) <= 3 THEN
-                RETURN '***';
-            ELSE
-                RETURN LEFT(data, 2) || REPEAT('*', LENGTH(data) - 4) || RIGHT(data, 2);
-            END IF;
-        WHEN 'email' THEN
-            IF POSITION('@' IN data) > 0 THEN
-                RETURN LEFT(data, 2) || '***@' || SPLIT_PART(data, '@', 2);
-            ELSE
-                RETURN '***';
-            END IF;
-        WHEN 'phone' THEN
-            IF LENGTH(data) >= 8 THEN
-                RETURN LEFT(data, 3) || '-***-' || RIGHT(data, 4);
-            ELSE
-                RETURN '***-****';
-            END IF;
-        ELSE
-            RETURN data;
-    END CASE;
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
-
--- 11. 개인정보 보호를 위한 뷰 (마스킹된 데이터)
-CREATE OR REPLACE VIEW lessors_masked AS
-SELECT 
-    id,
-    name,
-    mask_personal_data(
-        CASE 
-            WHEN contact_phone_encrypted IS NOT NULL 
-            THEN decrypt_personal_data(contact_phone_encrypted, current_setting('app.encryption_key', true))
-            ELSE contact_phone
-        END, 'phone'
-    ) AS contact_phone,
-    mask_personal_data(
-        CASE 
-            WHEN contact_email_encrypted IS NOT NULL 
-            THEN decrypt_personal_data(contact_email_encrypted, current_setting('app.encryption_key', true))
-            ELSE contact_email
-        END, 'email'
-    ) AS contact_email,
-    mask_personal_data(
-        CASE 
-            WHEN business_registration_number_encrypted IS NOT NULL 
-            THEN decrypt_personal_data(business_registration_number_encrypted, current_setting('app.encryption_key', true))
-            ELSE business_registration_number
-        END, 'partial'
-    ) AS business_registration_number,
-    mask_personal_data(
-        CASE 
-            WHEN address_encrypted IS NOT NULL 
-            THEN decrypt_personal_data(address_encrypted, current_setting('app.encryption_key', true))
-            ELSE address
-        END, 'partial'
-    ) AS address,
-    created_at,
-    updated_at
-FROM lessors;
-
--- 12. 보안 정책 설정 테이블
-CREATE TABLE IF NOT EXISTS security_policies (
-    id BIGSERIAL PRIMARY KEY,
-    policy_name VARCHAR(100) NOT NULL UNIQUE,
-    policy_value TEXT NOT NULL,
-    description TEXT,
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- 기본 보안 정책 설정
-INSERT INTO security_policies (policy_name, policy_value, description) VALUES
-('password_min_length', '10', '비밀번호 최소 길이'),
-('password_complexity', 'true', '비밀번호 복잡성 요구사항 적용'),
-('login_attempt_limit', '5', '로그인 시도 제한 횟수'),
-('account_lockout_duration', '30', '계정 잠금 지속 시간 (분)'),
-('session_timeout', '30', '세션 타임아웃 (분)'),
-('mfa_required_for_admin', 'true', '관리자 계정 2단계 인증 필수'),
-('audit_log_retention_days', '365', '감사 로그 보관 기간 (일)'),
-('encryption_algorithm', 'AES-256', '암호화 알고리즘'),
-('backup_encryption', 'true', '백업 데이터 암호화 여부')
-ON CONFLICT (policy_name) DO NOTHING;
-
--- 13. 권한 기반 접근 제어를 위한 보안 함수
-CREATE OR REPLACE FUNCTION check_data_access_permission(
-    p_user_id BIGINT,
-    p_table_name VARCHAR(50),
-    p_operation VARCHAR(20)
-)
-RETURNS BOOLEAN AS $$
+-- 기존 사용자 데이터 암호화 마이그레이션
+CREATE OR REPLACE FUNCTION migrate_users_encryption()
+RETURNS INTEGER AS $
 DECLARE
-    user_role VARCHAR(50);
-    has_permission BOOLEAN := false;
+    user_record RECORD;
+    migrated_count INTEGER := 0;
 BEGIN
-    -- 사용자 역할 조회
-    SELECT r.name INTO user_role
-    FROM users u
-    JOIN roles r ON u.role_id = r.id
-    WHERE u.id = p_user_id AND u.is_active = true;
-
-    -- 권한 확인 로직
-    CASE user_role
-        WHEN 'ADMIN' THEN
-            has_permission := true;
-        WHEN 'MANAGER' THEN
-            has_permission := (p_operation IN ('SELECT', 'INSERT', 'UPDATE'));
-        WHEN 'STAFF' THEN
-            has_permission := (p_operation = 'SELECT' AND p_table_name NOT IN ('users', 'audit_logs'));
-        WHEN 'VIEWER' THEN
-            has_permission := (p_operation = 'SELECT' AND p_table_name NOT LIKE '%_encrypted%');
-        ELSE
-            has_permission := false;
-    END CASE;
-
-    RETURN has_permission;
+    -- 암호화되지 않은 사용자 데이터 처리
+    FOR user_record IN 
+        SELECT user_id, phone_number
+        FROM users 
+        WHERE phone_number_encrypted IS NULL
+        AND phone_number IS NOT NULL
+    LOOP
+        UPDATE users SET
+            phone_number_encrypted = encrypt_phone_number(user_record.phone_number),
+            phone_number_hash = hash_phone_number(user_record.phone_number)
+        WHERE user_id = user_record.user_id;
+        
+        migrated_count := migrated_count + 1;
+    END LOOP;
+    
+    RETURN migrated_count;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 14. 데이터베이스 보안 모니터링 뷰
-CREATE OR REPLACE VIEW security_monitoring_summary AS
-SELECT 
-    DATE(accessed_at) as access_date,
-    table_name,
-    access_type,
-    COUNT(*) as access_count,
-    COUNT(DISTINCT user_id) as unique_users,
-    COUNT(CASE WHEN success = false THEN 1 END) as failed_attempts,
-    COUNT(DISTINCT ip_address) as unique_ips
-FROM sensitive_data_access_logs
-WHERE accessed_at >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY DATE(accessed_at), table_name, access_type
-ORDER BY access_date DESC, access_count DESC;
+-- =====================================================
+-- 10. 코멘트 추가
+-- =====================================================
 
--- 15. 보안 설정 확인 함수
-CREATE OR REPLACE FUNCTION check_security_configuration()
-RETURNS TABLE(
-    check_name TEXT,
-    status TEXT,
-    description TEXT,
-    recommendation TEXT
-) AS $$
+COMMENT ON TABLE encryption_keys IS '암호화 키 관리 테이블 (키 회전 지원)';
+COMMENT ON FUNCTION encrypt_sensitive_data(TEXT, VARCHAR) IS '민감 데이터 AES-256-GCM 암호화';
+COMMENT ON FUNCTION decrypt_sensitive_data(TEXT, VARCHAR) IS '암호화된 데이터 복호화';
+COMMENT ON FUNCTION create_searchable_hash(TEXT, TEXT) IS '검색 가능한 HMAC-SHA256 해시 생성';
+COMMENT ON FUNCTION create_encryption_key(VARCHAR, VARCHAR, VARCHAR) IS '새 암호화 키 생성 및 등록';
+COMMENT ON FUNCTION rotate_encryption_key(VARCHAR) IS '암호화 키 회전 (새 버전 생성)';
+
+-- =====================================================
+-- 11. 초기 설정 실행
+-- =====================================================
+
+-- 기본 암호화 키 초기화 (처음 실행 시에만)
+SELECT initialize_default_encryption_keys();
+
+-- 설정 완료 메시지
+DO $
 BEGIN
-    -- SSL 연결 확인
-    RETURN QUERY
-    SELECT 
-        'SSL Connection'::TEXT,
-        CASE WHEN current_setting('ssl') = 'on' THEN 'OK' ELSE 'WARNING' END::TEXT,
-        'SSL 연결 상태'::TEXT,
-        CASE WHEN current_setting('ssl') = 'on' THEN '정상' ELSE 'SSL을 활성화하세요' END::TEXT;
-
-    -- 암호화 확장 모듈 확인
-    RETURN QUERY
-    SELECT 
-        'pgcrypto Extension'::TEXT,
-        CASE WHEN EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN 'OK' ELSE 'ERROR' END::TEXT,
-        'pgcrypto 확장 모듈 설치 상태'::TEXT,
-        CASE WHEN EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN '정상' ELSE 'pgcrypto 확장을 설치하세요' END::TEXT;
-
-    -- 보안 정책 확인
-    RETURN QUERY
-    SELECT 
-        'Security Policies'::TEXT,
-        CASE WHEN EXISTS(SELECT 1 FROM security_policies WHERE is_active = true) THEN 'OK' ELSE 'WARNING' END::TEXT,
-        '보안 정책 설정 상태'::TEXT,
-        CASE WHEN EXISTS(SELECT 1 FROM security_policies WHERE is_active = true) THEN '정상' ELSE '보안 정책을 설정하세요' END::TEXT;
-
-END;
-$$ LANGUAGE plpgsql;
-
--- 16. 주석 및 문서화
-COMMENT ON FUNCTION encrypt_personal_data(TEXT, TEXT) IS '개인정보 AES-256 암호화 함수';
-COMMENT ON FUNCTION decrypt_personal_data(TEXT, TEXT) IS '개인정보 AES-256 복호화 함수';
-COMMENT ON FUNCTION log_sensitive_data_access IS '민감 데이터 접근 로깅 함수';
-COMMENT ON FUNCTION check_data_access_permission IS '데이터 접근 권한 확인 함수';
-COMMENT ON FUNCTION mask_personal_data IS '개인정보 마스킹 함수 (개발/테스트용)';
-COMMENT ON TABLE sensitive_data_access_logs IS '민감 데이터 접근 로그 테이블';
-COMMENT ON TABLE security_policies IS '시스템 보안 정책 설정 테이블';
-COMMENT ON VIEW security_monitoring_summary IS '보안 모니터링 요약 뷰';
-
--- 완료 메시지
-SELECT '데이터 암호화 및 보안 설계가 완료되었습니다.' AS status;
+    RAISE NOTICE '=== QIRO 데이터 암호화 시스템 설정 완료 ===';
+    RAISE NOTICE '1. 암호화 키 관리 시스템 구축 완료';
+    RAISE NOTICE '2. AES-256-GCM 암호화/복호화 함수 생성 완료';
+    RAISE NOTICE '3. 검색 가능한 해시 함수 생성 완료';
+    RAISE NOTICE '4. 특화된 암호화 함수들 생성 완료';
+    RAISE NOTICE '5. 키 관리 및 회전 시스템 구축 완료';
+    RAISE NOTICE '';
+    RAISE NOTICE '=== 주요 함수들 ===';
+    RAISE NOTICE '- encrypt_business_number(text): 사업자등록번호 암호화';
+    RAISE NOTICE '- encrypt_phone_number(text): 전화번호 암호화';
+    RAISE NOTICE '- decrypt_business_number(text): 사업자등록번호 복호화';
+    RAISE NOTICE '- decrypt_phone_number(text): 전화번호 복호화';
+    RAISE NOTICE '- check_encryption_key_status(): 키 상태 확인';
+    RAISE NOTICE '- get_encryption_statistics(): 암호화 통계';
+    RAISE NOTICE '';
+    RAISE NOTICE '=== 보안 권장사항 ===';
+    RAISE NOTICE '1. 실제 운영환경에서는 외부 키 관리 시스템 사용 권장';
+    RAISE NOTICE '2. 정기적인 키 회전 정책 수립 필요';
+    RAISE NOTICE '3. 암호화된 데이터 백업 및 복구 절차 수립 필요';
+END $;

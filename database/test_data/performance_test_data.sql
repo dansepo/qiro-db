@@ -1,247 +1,290 @@
 -- =====================================================
--- 성능 테스트용 대용량 데이터 생성 스크립트
+-- 성능 및 부하 테스트 데이터 생성
+-- QIRO 사업자 회원가입 시스템
+-- PostgreSQL 17.5 기반
 -- 작성일: 2025-01-30
--- 설명: 성능 테스트를 위한 대용량 테스트 데이터 생성
 -- =====================================================
 
--- 성능 테스트용 건물 생성 (10개)
-INSERT INTO buildings (
-    name, address, building_type, total_floors, basement_floors, total_area,
-    construction_year, owner_name, owner_contact, management_company,
-    status, created_by, updated_by
+-- 테스트 환경 설정
+SET client_min_messages = WARNING;
+
+-- =====================================================
+-- 1. 대용량 테스트 데이터 생성 함수
+-- =====================================================
+
+-- 대용량 회사 데이터 생성 함수
+CREATE OR REPLACE FUNCTION generate_test_companies(company_count INTEGER DEFAULT 1000)
+RETURNS VOID AS $
+DECLARE
+    i INTEGER;
+    business_number TEXT;
+    company_name TEXT;
+    representative_name TEXT;
+    contact_email TEXT;
+    contact_phone TEXT;
+    business_address TEXT;
+BEGIN
+    RAISE NOTICE '대용량 회사 데이터 생성 시작: % 개', company_count;
+    
+    FOR i IN 1..company_count LOOP
+        -- 유효한 사업자등록번호 생성 (간단한 패턴 사용)
+        business_number := LPAD((1000000000 + i)::TEXT, 10, '0');
+        
+        -- 테스트 데이터 생성
+        company_name := '테스트회사' || i;
+        representative_name := '대표자' || i;
+        contact_email := 'company' || i || '@test.com';
+        contact_phone := '02-' || LPAD(i::TEXT, 8, '0');
+        business_address := '서울시 강남구 테스트로 ' || i;
+        
+        INSERT INTO companies (
+            business_registration_number, company_name, representative_name,
+            business_address, contact_phone, contact_email, business_type,
+            establishment_date, verification_status, subscription_status
+        ) VALUES (
+            business_number, company_name, representative_name,
+            business_address, contact_phone, contact_email, '부동산임대업',
+            '2020-01-01'::DATE + (i % 1000)::INTEGER, 'VERIFIED', 'ACTIVE'
+        );
+        
+        -- 진행 상황 출력 (100개마다)
+        IF i % 100 = 0 THEN
+            RAISE NOTICE '회사 데이터 생성 진행: %/%', i, company_count;
+        END IF;
+    END LOOP;
+    
+    RAISE NOTICE '대용량 회사 데이터 생성 완료: % 개', company_count;
+END;
+$ LANGUAGE plpgsql;
+
+-- 대용량 사용자 데이터 생성 함수
+CREATE OR REPLACE FUNCTION generate_test_users(users_per_company INTEGER DEFAULT 5)
+RETURNS VOID AS $
+DECLARE
+    company_rec RECORD;
+    i INTEGER;
+    user_email TEXT;
+    user_name TEXT;
+    user_phone TEXT;
+    user_count INTEGER := 0;
+BEGIN
+    RAISE NOTICE '대용량 사용자 데이터 생성 시작: 회사당 % 명', users_per_company;
+    
+    FOR company_rec IN SELECT company_id, company_name FROM companies WHERE company_name LIKE '테스트회사%' LOOP
+        FOR i IN 1..users_per_company LOOP
+            user_email := 'user' || user_count || '@' || LOWER(REPLACE(company_rec.company_name, '테스트회사', 'company')) || '.com';
+            user_name := '사용자' || user_count;
+            user_phone := '010-' || LPAD(user_count::TEXT, 8, '0');
+            
+            INSERT INTO users (
+                company_id, email, password_hash, full_name,
+                phone_number, user_type, status, email_verified
+            ) VALUES (
+                company_rec.company_id, user_email, '$2a$10$example.hash',
+                user_name, user_phone,
+                CASE WHEN i = 1 THEN 'SUPER_ADMIN' ELSE 'EMPLOYEE' END,
+                'ACTIVE', true
+            );
+            
+            user_count := user_count + 1;
+        END LOOP;
+        
+        -- 진행 상황 출력 (100개 회사마다)
+        IF user_count % (100 * users_per_company) = 0 THEN
+            RAISE NOTICE '사용자 데이터 생성 진행: % 명', user_count;
+        END IF;
+    END LOOP;
+    
+    RAISE NOTICE '대용량 사용자 데이터 생성 완료: % 명', user_count;
+END;
+$ LANGUAGE plpgsql;
+
+-- 대용량 건물 데이터 생성 함수
+CREATE OR REPLACE FUNCTION generate_test_buildings(buildings_per_company INTEGER DEFAULT 3)
+RETURNS VOID AS $
+DECLARE
+    company_rec RECORD;
+    i INTEGER;
+    building_name TEXT;
+    building_address TEXT;
+    building_count INTEGER := 0;
+BEGIN
+    RAISE NOTICE '대용량 건물 데이터 생성 시작: 회사당 % 개', buildings_per_company;
+    
+    FOR company_rec IN SELECT company_id, company_name FROM companies WHERE company_name LIKE '테스트회사%' LOOP
+        FOR i IN 1..buildings_per_company LOOP
+            building_name := company_rec.company_name || ' 건물' || i;
+            building_address := '서울시 강남구 ' || company_rec.company_name || '로 ' || (i * 100);
+            
+            INSERT INTO buildings (
+                company_id, name, address, building_type,
+                total_floors, total_area, total_units,
+                construction_year, status
+            ) VALUES (
+                company_rec.company_id, building_name, building_address,
+                CASE (i % 3) 
+                    WHEN 0 THEN 'APARTMENT'
+                    WHEN 1 THEN 'COMMERCIAL'
+                    ELSE 'MIXED_USE'
+                END,
+                5 + (i % 15), -- 5~20층
+                1000.00 + (i * 500), -- 1000~2500㎡
+                20 + (i * 10), -- 20~50호실
+                2015 + (i % 8), -- 2015~2023년
+                'ACTIVE'
+            );
+            
+            building_count := building_count + 1;
+        END LOOP;
+        
+        -- 진행 상황 출력 (100개 회사마다)
+        IF building_count % (100 * buildings_per_company) = 0 THEN
+            RAISE NOTICE '건물 데이터 생성 진행: % 개', building_count;
+        END IF;
+    END LOOP;
+    
+    RAISE NOTICE '대용량 건물 데이터 생성 완료: % 개', building_count;
+END;
+$ LANGUAGE plpgsql;
+
+-- 대용량 건물 그룹 데이터 생성 함수
+CREATE OR REPLACE FUNCTION generate_test_building_groups(groups_per_company INTEGER DEFAULT 2)
+RETURNS VOID AS $
+DECLARE
+    company_rec RECORD;
+    i INTEGER;
+    group_name TEXT;
+    group_count INTEGER := 0;
+BEGIN
+    RAISE NOTICE '대용량 건물 그룹 데이터 생성 시작: 회사당 % 개', groups_per_company;
+    
+    FOR company_rec IN SELECT company_id, company_name FROM companies WHERE company_name LIKE '테스트회사%' LOOP
+        FOR i IN 1..groups_per_company LOOP
+            group_name := company_rec.company_name || ' 그룹' || i;
+            
+            INSERT INTO building_groups (
+                company_id, group_name, group_type, description
+            ) VALUES (
+                company_rec.company_id, group_name,
+                CASE (i % 4)
+                    WHEN 0 THEN 'COST_ALLOCATION'
+                    WHEN 1 THEN 'MANAGEMENT_UNIT'
+                    WHEN 2 THEN 'GEOGRAPHIC'
+                    ELSE 'CUSTOM'
+                END,
+                '테스트용 ' || group_name
+            );
+            
+            group_count := group_count + 1;
+        END LOOP;
+        
+        -- 진행 상황 출력 (100개 회사마다)
+        IF group_count % (100 * groups_per_company) = 0 THEN
+            RAISE NOTICE '건물 그룹 데이터 생성 진행: % 개', group_count;
+        END IF;
+    END LOOP;
+    
+    RAISE NOTICE '대용량 건물 그룹 데이터 생성 완료: % 개', group_count;
+END;
+$ LANGUAGE plpgsql;
+
+-- =====================================================
+-- 2. 테스트 데이터 생성 실행
+-- =====================================================
+
+-- 테스트 데이터 생성 함수 (전체)
+CREATE OR REPLACE FUNCTION setup_performance_test_data(
+    company_count INTEGER DEFAULT 1000,
+    users_per_company INTEGER DEFAULT 5,
+    buildings_per_company INTEGER DEFAULT 3,
+    groups_per_company INTEGER DEFAULT 2
 )
-SELECT 
-    '성능테스트빌딩' || i::text,
-    '서울시 강남구 테헤란로 ' || (100 + i)::text,
-    CASE (i % 4)
-        WHEN 0 THEN 'COMMERCIAL'
-        WHEN 1 THEN 'OFFICE'
-        WHEN 2 THEN 'RESIDENTIAL'
-        ELSE 'MIXED_USE'
-    END,
-    5 + (i % 15),  -- 5-20층
-    1 + (i % 3),   -- 1-3층 지하
-    1000.0 + (i * 500),  -- 1000-6000㎡
-    2015 + (i % 10),  -- 2015-2024년
-    '성능테스트소유자' || i::text,
-    '010-' || LPAD((1000 + i)::text, 4, '0') || '-' || LPAD((i * 10)::text, 4, '0'),
-    'QIRO 관리',
-    'ACTIVE',
-    1, 1
-FROM generate_series(1, 10) as i;
+RETURNS VOID AS $
+DECLARE
+    start_time TIMESTAMP;
+    end_time TIMESTAMP;
+BEGIN
+    start_time := clock_timestamp();
+    
+    RAISE NOTICE '=== 성능 테스트 데이터 생성 시작 ===';
+    RAISE NOTICE '회사: % 개, 회사당 사용자: % 명, 회사당 건물: % 개, 회사당 그룹: % 개', 
+        company_count, users_per_company, buildings_per_company, groups_per_company;
+    
+    -- 1. 회사 데이터 생성
+    PERFORM generate_test_companies(company_count);
+    
+    -- 2. 사용자 데이터 생성
+    PERFORM generate_test_users(users_per_company);
+    
+    -- 3. 건물 데이터 생성
+    PERFORM generate_test_buildings(buildings_per_company);
+    
+    -- 4. 건물 그룹 데이터 생성
+    PERFORM generate_test_building_groups(groups_per_company);
+    
+    end_time := clock_timestamp();
+    
+    RAISE NOTICE '=== 성능 테스트 데이터 생성 완료 ===';
+    RAISE NOTICE '총 소요 시간: %', end_time - start_time;
+    
+    -- 생성된 데이터 통계 출력
+    RAISE NOTICE '';
+    RAISE NOTICE '생성된 데이터 통계:';
+    RAISE NOTICE '- 회사: % 개', (SELECT COUNT(*) FROM companies WHERE company_name LIKE '테스트회사%');
+    RAISE NOTICE '- 사용자: % 명', (SELECT COUNT(*) FROM users u JOIN companies c ON u.company_id = c.company_id WHERE c.company_name LIKE '테스트회사%');
+    RAISE NOTICE '- 건물: % 개', (SELECT COUNT(*) FROM buildings b JOIN companies c ON b.company_id = c.company_id WHERE c.company_name LIKE '테스트회사%');
+    RAISE NOTICE '- 건물 그룹: % 개', (SELECT COUNT(*) FROM building_groups bg JOIN companies c ON bg.company_id = c.company_id WHERE c.company_name LIKE '테스트회사%');
+END;
+$ LANGUAGE plpgsql;
 
-COMMIT;-
-- 성능 테스트용 호실 생성 (건물당 50개, 총 500개)
-INSERT INTO units (
-    building_id, unit_number, floor_number, unit_type, area, common_area,
-    monthly_rent, deposit, maintenance_fee, status, room_count, bathroom_count,
-    has_balcony, has_parking, created_by, updated_by
-)
-SELECT 
-    ((i - 1) / 50) + (SELECT MIN(id) FROM buildings WHERE name LIKE '성능테스트빌딩%'),
-    LPAD(((i - 1) % 50 + 1)::text, 3, '0'),
-    ((i - 1) % 50) / 10 + 1,  -- 층수
-    CASE ((i - 1) % 4)
-        WHEN 0 THEN 'COMMERCIAL'
-        WHEN 1 THEN 'OFFICE'
-        WHEN 2 THEN 'RESIDENTIAL'
-        ELSE 'RETAIL'
-    END,
-    30.0 + ((i % 100) * 0.5),  -- 30-80㎡
-    5.0 + ((i % 20) * 0.5),    -- 5-15㎡
-    800000 + ((i % 50) * 50000),  -- 80만-330만원
-    8000000 + ((i % 50) * 500000), -- 800만-3300만원
-    100000 + ((i % 30) * 10000),   -- 10만-40만원
-    CASE (i % 5)
-        WHEN 0 THEN 'AVAILABLE'
-        WHEN 1 THEN 'MAINTENANCE'
-        ELSE 'OCCUPIED'
-    END,
-    1 + (i % 5),  -- 1-5개 방
-    1 + (i % 3),  -- 1-3개 화장실
-    (i % 2) = 0,  -- 50% 발코니
-    (i % 3) = 0,  -- 33% 주차
-    1, 1
-FROM generate_series(1, 500) as i;
+-- =====================================================
+-- 3. 테스트 데이터 정리 함수
+-- =====================================================
 
-COMMIT;-- 성능
- 테스트용 임차인 생성 (300명)
-INSERT INTO tenants (
-    name, entity_type, business_registration_number, representative_name,
-    primary_phone, email, current_address, occupation, monthly_income,
-    family_members, is_active, privacy_consent, created_by, updated_by
-)
-SELECT 
-    '성능테스트임차인' || i::text,
-    CASE (i % 10)
-        WHEN 0 THEN 'CORPORATION'
-        ELSE 'INDIVIDUAL'
-    END,
-    CASE WHEN (i % 10) = 0 THEN 
-        LPAD((100000000 + i)::text, 10, '0')
-    ELSE NULL END,
-    CASE WHEN (i % 10) = 0 THEN 
-        '성능테스트대표' || i::text
-    ELSE NULL END,
-    '010-' || LPAD((2000 + i)::text, 4, '0') || '-' || LPAD((i * 13)::text, 4, '0'),
-    'perf_tenant' || i::text || '@test.com',
-    '서울시 강남구 테스트로 ' || i::text,
-    CASE (i % 8)
-        WHEN 0 THEN '회사원'
-        WHEN 1 THEN '프리랜서'
-        WHEN 2 THEN '의사'
-        WHEN 3 THEN '변호사'
-        WHEN 4 THEN '교사'
-        WHEN 5 THEN '공무원'
-        WHEN 6 THEN '사업자'
-        ELSE '기타'
-    END,
-    2000000 + ((i % 50) * 100000),  -- 200만-700만원
-    1 + (i % 5),  -- 1-5명 가족
-    true, true, 1, 1
-FROM generate_series(1, 300) as i;
+-- 성능 테스트 데이터 정리 함수
+CREATE OR REPLACE FUNCTION cleanup_performance_test_data()
+RETURNS VOID AS $
+DECLARE
+    start_time TIMESTAMP;
+    end_time TIMESTAMP;
+    deleted_companies INTEGER;
+BEGIN
+    start_time := clock_timestamp();
+    
+    RAISE NOTICE '=== 성능 테스트 데이터 정리 시작 ===';
+    
+    -- 테스트 데이터 삭제 (CASCADE로 관련 데이터도 함께 삭제됨)
+    DELETE FROM companies WHERE company_name LIKE '테스트회사%';
+    GET DIAGNOSTICS deleted_companies = ROW_COUNT;
+    
+    -- 함수들 삭제
+    DROP FUNCTION IF EXISTS generate_test_companies(INTEGER);
+    DROP FUNCTION IF EXISTS generate_test_users(INTEGER);
+    DROP FUNCTION IF EXISTS generate_test_buildings(INTEGER);
+    DROP FUNCTION IF EXISTS generate_test_building_groups(INTEGER);
+    DROP FUNCTION IF EXISTS setup_performance_test_data(INTEGER, INTEGER, INTEGER, INTEGER);
+    DROP FUNCTION IF EXISTS cleanup_performance_test_data();
+    
+    end_time := clock_timestamp();
+    
+    RAISE NOTICE '=== 성능 테스트 데이터 정리 완료 ===';
+    RAISE NOTICE '삭제된 회사: % 개', deleted_companies;
+    RAISE NOTICE '총 소요 시간: %', end_time - start_time;
+END;
+$ LANGUAGE plpgsql;
 
-COMMIT;-
-- 성능 테스트용 임대 계약 생성 (300개)
-INSERT INTO lease_contracts (
-    contract_number, unit_id, tenant_id, lessor_id, start_date, end_date,
-    monthly_rent, deposit, maintenance_fee, contract_type, status,
-    created_by, updated_by
-)
-SELECT 
-    'PERF' || LPAD(i::text, 6, '0'),
-    (SELECT id FROM units WHERE building_id IN (SELECT id FROM buildings WHERE name LIKE '성능테스트빌딩%') 
-     AND status = 'OCCUPIED' ORDER BY id LIMIT 1 OFFSET (i-1)),
-    (SELECT id FROM tenants WHERE name LIKE '성능테스트임차인%' ORDER BY id LIMIT 1 OFFSET (i-1)),
-    1,  -- 첫 번째 임대인
-    '2024-01-01'::date + (i % 365),  -- 2024년 중 랜덤 시작일
-    '2024-01-01'::date + (i % 365) + INTERVAL '2 years',  -- 2년 계약
-    800000 + ((i % 50) * 50000),
-    8000000 + ((i % 50) * 500000),
-    100000 + ((i % 30) * 10000),
-    'NEW',
-    'ACTIVE',
-    1, 1
-FROM generate_series(1, 300) as i;
+-- =====================================================
+-- 4. 테스트 데이터 생성 실행 (기본값 사용)
+-- =====================================================
 
-COMMIT;-- 성능
- 테스트용 청구월 생성 (12개월 * 10개 건물 = 120개)
-INSERT INTO billing_months (
-    building_id, billing_year, billing_month, status, due_date,
-    external_bill_input_completed, meter_reading_completed,
-    created_by, updated_by
-)
-SELECT 
-    b.id,
-    2024,
-    m.month_num,
-    CASE 
-        WHEN m.month_num <= 10 THEN 'CLOSED'
-        WHEN m.month_num = 11 THEN 'INVOICED'
-        ELSE 'CALCULATED'
-    END,
-    ('2024-' || LPAD(m.month_num::text, 2, '0') || '-05')::date,
-    m.month_num <= 11,
-    m.month_num <= 11,
-    1, 1
-FROM (SELECT id FROM buildings WHERE name LIKE '성능테스트빌딩%') b
-CROSS JOIN (SELECT generate_series(1, 12) as month_num) m;
+-- 성능 테스트용 데이터 생성 (소규모 - 100개 회사)
+-- SELECT setup_performance_test_data(100, 3, 2, 1);
 
-COMMIT;--
- 성능 테스트용 고지서 생성 (대량 데이터 - 3000개)
-INSERT INTO invoices (
-    billing_month_id, unit_id, invoice_number, issue_date, due_date,
-    subtotal_amount, tax_amount, status, created_by, updated_by
-)
-SELECT 
-    bm.id,
-    u.id,
-    'PERF-' || b.name || '-' || bm.billing_year || '-' || LPAD(bm.billing_month::text, 2, '0') || '-' || LPAD(u.unit_number, 4, '0'),
-    ('2024-' || LPAD(bm.billing_month::text, 2, '0') || '-25')::date,
-    ('2024-' || LPAD(bm.billing_month::text, 2, '0') || '-05')::date + INTERVAL '1 month',
-    150000 + ((u.id % 100) * 1000),  -- 15만-25만원
-    15000 + ((u.id % 100) * 100),    -- 1.5만-2.5만원
-    CASE 
-        WHEN bm.billing_month <= 9 THEN 'PAID'
-        WHEN bm.billing_month = 10 THEN 'PARTIAL_PAID'
-        WHEN bm.billing_month = 11 THEN 'OVERDUE'
-        ELSE 'ISSUED'
-    END,
-    1, 1
-FROM billing_months bm
-JOIN buildings b ON bm.building_id = b.id
-JOIN units u ON b.id = u.building_id
-WHERE b.name LIKE '성능테스트빌딩%'
-  AND bm.billing_year = 2024
-  AND u.status = 'OCCUPIED';
+-- 성능 테스트용 데이터 생성 (중간 규모 - 500개 회사)
+-- SELECT setup_performance_test_data(500, 5, 3, 2);
 
-COMMIT;-
-- 성능 테스트용 수납 데이터 생성 (2000개)
-INSERT INTO payments (
-    invoice_id, payment_date, amount, payment_method, payment_reference,
-    notes, payment_status, processed_by
-)
-SELECT 
-    i.id,
-    i.due_date + INTERVAL '1 day' * (CASE 
-        WHEN i.status = 'PAID' THEN -(random() * 5)::int
-        WHEN i.status = 'PARTIAL_PAID' THEN (random() * 10)::int
-        WHEN i.status = 'OVERDUE' THEN (random() * 30)::int + 10
-        ELSE 0
-    END),
-    CASE 
-        WHEN i.status = 'PAID' THEN i.subtotal_amount + i.tax_amount
-        WHEN i.status = 'PARTIAL_PAID' THEN (i.subtotal_amount + i.tax_amount) * 0.7
-        WHEN i.status = 'OVERDUE' THEN (i.subtotal_amount + i.tax_amount) * 0.3
-        ELSE 0
-    END,
-    CASE ((i.id % 5))
-        WHEN 0 THEN 'CASH'
-        WHEN 1 THEN 'BANK_TRANSFER'
-        WHEN 2 THEN 'CARD'
-        WHEN 3 THEN 'CMS'
-        ELSE 'VIRTUAL_ACCOUNT'
-    END,
-    'PERF' || LPAD(i.id::text, 8, '0'),
-    '성능테스트 수납',
-    'COMPLETED',
-    1
-FROM invoices i
-WHERE i.invoice_number LIKE 'PERF-%'
-  AND i.status IN ('PAID', 'PARTIAL_PAID', 'OVERDUE');
+-- 성능 테스트용 데이터 생성 (대규모 - 1000개 회사)
+-- SELECT setup_performance_test_data(1000, 5, 3, 2);
 
-COMMIT;--
- 성능 테스트 결과 확인
-SELECT 
-    '성능 테스트용 대용량 데이터 생성 완료' as message,
-    (SELECT COUNT(*) FROM buildings WHERE name LIKE '성능테스트빌딩%') as test_buildings,
-    (SELECT COUNT(*) FROM units WHERE building_id IN (SELECT id FROM buildings WHERE name LIKE '성능테스트빌딩%')) as test_units,
-    (SELECT COUNT(*) FROM tenants WHERE name LIKE '성능테스트임차인%') as test_tenants,
-    (SELECT COUNT(*) FROM lease_contracts WHERE contract_number LIKE 'PERF%') as test_contracts,
-    (SELECT COUNT(*) FROM billing_months WHERE building_id IN (SELECT id FROM buildings WHERE name LIKE '성능테스트빌딩%')) as test_billing_months,
-    (SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE 'PERF-%') as test_invoices,
-    (SELECT COUNT(*) FROM payments WHERE payment_reference LIKE 'PERF%') as test_payments;
-
--- 성능 테스트 쿼리 예시
--- 1. 건물별 월별 수납률 조회 (복잡한 집계 쿼리)
-EXPLAIN ANALYZE
-SELECT 
-    b.name as building_name,
-    bm.billing_year,
-    bm.billing_month,
-    COUNT(i.id) as total_invoices,
-    COUNT(CASE WHEN i.status = 'PAID' THEN 1 END) as paid_invoices,
-    SUM(i.subtotal_amount + i.tax_amount) as total_amount,
-    SUM(COALESCE(p.amount, 0)) as collected_amount,
-    ROUND(
-        COUNT(CASE WHEN i.status = 'PAID' THEN 1 END)::DECIMAL / COUNT(i.id) * 100, 2
-    ) as collection_rate
-FROM buildings b
-JOIN billing_months bm ON b.id = bm.building_id
-JOIN invoices i ON bm.id = i.billing_month_id
-LEFT JOIN payments p ON i.id = p.invoice_id AND p.payment_status = 'COMPLETED'
-WHERE b.name LIKE '성능테스트빌딩%'
-GROUP BY b.id, b.name, bm.billing_year, bm.billing_month
-ORDER BY b.name, bm.billing_year, bm.billing_month;
-
-COMMIT;
+-- 테스트 완료 후 정리 (필요시 주석 해제)
+-- SELECT cleanup_performance_test_data();
