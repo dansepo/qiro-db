@@ -7,6 +7,7 @@
 
 -- 테스트 환경 설정
 SET client_min_messages = WARNING;
+SET search_path TO bms;
 
 -- =====================================================
 -- 1. 테스트 실행 로그 테이블
@@ -95,8 +96,8 @@ BEGIN
         -- 멀티테넌시 격리 테스트 실행
         test_start_time := clock_timestamp();
         
-        -- 테스트 파일 로드 및 실행
-        \i database/test_data/multitenancy_isolation_test.sql
+        -- 멀티테넌시 격리 테스트 실행 (간단한 버전)
+        PERFORM test_multitenancy_isolation();
         
         test_end_time := clock_timestamp();
         
