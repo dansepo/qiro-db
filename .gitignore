@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 빌드
+dist/
+build/
+
+# 환경 설정
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+.kiro/
+
+# OS
+Thumbs.db
+ehthumbs.db
+
+# Git
+*.orig
+
+# 로그
+logs
+*.log
