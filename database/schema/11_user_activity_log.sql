@@ -25,100 +25,95 @@ CREATE TABLE IF NOT EXISTS bms.user_activity_logs (
     session_start_time TIMESTAMP WITH TIME ZONE,        -- 세션 시작 시간
     session_duration INTEGER,                           -- 세션 지속 시간 (초)
     
-    -- 요청 정보
-    request_method VARCHAR(10),                         -- HTTP 메소드
-    request_url TEXT,                                   -- 요청 URL
-    request_params JSONB,                               -- 요청 파라미터
-    response_status INTEGER,                            -- 응답 상태 코드
-    response_time INTEGER,                              -- 응답 시간 (ms)
-    
-    -- 클라이언트 정보
+    -- 접근 정보
     client_ip INET,                                     -- 클라이언트 IP
-    client_port INTEGER,                                -- 클라이언트 포트
     user_agent TEXT,                                    -- 사용자 에이전트
-    browser_name VARCHAR(50),                           -- 브라우저명
-    browser_version VARCHAR(20),                        -- 브라우저 버전
-    os_name VARCHAR(50),                                -- 운영체제명
-    os_version VARCHAR(20),                             -- 운영체제 버전
     device_type VARCHAR(20),                            -- 디바이스 타입
+    browser_name VARCHAR(50),                           -- 브라우저명
+    os_name VARCHAR(50),                                -- 운영체제명
     
-    -- 지리적 정보
+    -- 위치 정보
     country_code VARCHAR(2),                            -- 국가 코드
     region VARCHAR(100),                                -- 지역
     city VARCHAR(100),                                  -- 도시
     timezone VARCHAR(50),                               -- 시간대
     
-    -- 보안 정보
-    is_suspicious BOOLEAN DEFAULT false,                -- 의심스러운 활동 여부
-    risk_score INTEGER DEFAULT 0,                       -- 위험 점수 (0-100)
-    security_flags TEXT[],                              -- 보안 플래그
+    -- 애플리케이션 정보
+    application_name VARCHAR(100),                      -- 애플리케이션명
+    application_version VARCHAR(20),                    -- 애플리케이션 버전
+    api_endpoint VARCHAR(200),                          -- API 엔드포인트
+    http_method VARCHAR(10),                            -- HTTP 메소드
+    http_status_code INTEGER,                           -- HTTP 상태 코드
     
     -- 비즈니스 컨텍스트
     business_context VARCHAR(100),                      -- 비즈니스 컨텍스트
-    feature_used VARCHAR(100),                          -- 사용된 기능
-    data_accessed TEXT[],                               -- 접근한 데이터
+    resource_type VARCHAR(50),                          -- 리소스 타입
+    resource_id UUID,                                   -- 리소스 ID
+    building_id UUID,                                   -- 관련 건물 ID
     
     -- 성능 정보
-    page_load_time INTEGER,                             -- 페이지 로드 시간 (ms)
-    database_query_time INTEGER,                        -- DB 쿼리 시간 (ms)
-    api_call_count INTEGER DEFAULT 0,                   -- API 호출 횟수
+    response_time_ms INTEGER,                           -- 응답 시간 (밀리초)
+    request_size_bytes INTEGER,                         -- 요청 크기 (바이트)
+    response_size_bytes INTEGER,                        -- 응답 크기 (바이트)
     
-    -- 메타데이터
+    -- 보안 정보
+    security_level INTEGER DEFAULT 1,                   -- 보안 레벨 (1-5)
+    risk_score INTEGER DEFAULT 0,                       -- 위험 점수 (0-100)
+    is_suspicious BOOLEAN DEFAULT false,                -- 의심스러운 활동 여부
+    threat_indicators TEXT[],                           -- 위협 지표 목록
+    
+    -- 추가 데이터
+    metadata JSONB,                                     -- 추가 메타데이터
+    tags TEXT[],                                        -- 태그 목록
+    
+    -- 시간 정보
+    -- activity_timestamp는 created_at으로 대체
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     -- 제약조건
     CONSTRAINT fk_user_activity_company FOREIGN KEY (company_id) REFERENCES bms.companies(company_id) ON DELETE CASCADE,
     CONSTRAINT fk_user_activity_user FOREIGN KEY (user_id) REFERENCES bms.users(user_id) ON DELETE SET NULL,
+    CONSTRAINT fk_user_activity_building FOREIGN KEY (building_id) REFERENCES bms.buildings(building_id) ON DELETE SET NULL,
     
     -- 체크 제약조건
     CONSTRAINT chk_activity_type CHECK (activity_type IN (
         'LOGIN',                -- 로그인
         'LOGOUT',               -- 로그아웃
         'PAGE_VIEW',            -- 페이지 조회
-        'SEARCH',               -- 검색
-        'CREATE',               -- 생성
-        'READ',                 -- 조회
-        'UPDATE',               -- 수정
-        'DELETE',               -- 삭제
-        'DOWNLOAD',             -- 다운로드
-        'UPLOAD',               -- 업로드
-        'EXPORT',               -- 내보내기
-        'IMPORT',               -- 가져오기
-        'PRINT',                -- 인쇄
-        'EMAIL_SEND',           -- 이메일 발송
-        'REPORT_GENERATE',      -- 보고서 생성
-        'BACKUP',               -- 백업
-        'RESTORE',              -- 복원
-        'CONFIG_CHANGE',        -- 설정 변경
-        'USER_MANAGEMENT',      -- 사용자 관리
-        'PERMISSION_CHANGE',    -- 권한 변경
         'API_CALL',             -- API 호출
-        'ERROR',                -- 오류
-        'SECURITY_EVENT'        -- 보안 이벤트
+        'DATA_EXPORT',          -- 데이터 내보내기
+        'DATA_IMPORT',          -- 데이터 가져오기
+        'FILE_UPLOAD',          -- 파일 업로드
+        'FILE_DOWNLOAD',        -- 파일 다운로드
+        'SEARCH',               -- 검색
+        'REPORT_GENERATION',    -- 보고서 생성
+        'CONFIGURATION_CHANGE', -- 설정 변경
+        'PASSWORD_CHANGE',      -- 비밀번호 변경
+        'PERMISSION_CHANGE',    -- 권한 변경
+        'FAILED_LOGIN',         -- 로그인 실패
+        'SECURITY_VIOLATION',   -- 보안 위반
+        'SYSTEM_ERROR',         -- 시스템 오류
+        'CUSTOM'                -- 사용자 정의
     )),
     CONSTRAINT chk_activity_category CHECK (activity_category IN (
         'AUTHENTICATION',       -- 인증
         'AUTHORIZATION',        -- 인가
         'DATA_ACCESS',          -- 데이터 접근
         'DATA_MODIFICATION',    -- 데이터 수정
-        'SYSTEM_ADMIN',         -- 시스템 관리
-        'USER_INTERFACE',       -- 사용자 인터페이스
-        'REPORTING',            -- 보고서
-        'INTEGRATION',          -- 연동
+        'SYSTEM_ADMINISTRATION',-- 시스템 관리
+        'BUSINESS_OPERATION',   -- 비즈니스 운영
         'SECURITY',             -- 보안
         'PERFORMANCE',          -- 성능
-        'ERROR_HANDLING'        -- 오류 처리
+        'ERROR',                -- 오류
+        'AUDIT'                 -- 감사
     )),
-    CONSTRAINT chk_activity_result CHECK (activity_result IN (
-        'SUCCESS',              -- 성공
-        'FAILURE',              -- 실패
-        'PARTIAL_SUCCESS',      -- 부분 성공
-        'TIMEOUT',              -- 타임아웃
-        'CANCELLED',            -- 취소됨
-        'PENDING'               -- 대기중
-    )),
+    CONSTRAINT chk_activity_result CHECK (activity_result IN ('SUCCESS', 'FAILURE', 'PARTIAL', 'TIMEOUT', 'ERROR')),
+    CONSTRAINT chk_device_type CHECK (device_type IN ('DESKTOP', 'MOBILE', 'TABLET', 'API', 'UNKNOWN')),
+    CONSTRAINT chk_security_level CHECK (security_level BETWEEN 1 AND 5),
     CONSTRAINT chk_risk_score CHECK (risk_score BETWEEN 0 AND 100),
-    CONSTRAINT chk_response_status CHECK (response_status BETWEEN 100 AND 599)
+    CONSTRAINT chk_response_time CHECK (response_time_ms >= 0),
+    CONSTRAINT chk_request_size CHECK (request_size_bytes >= 0),
+    CONSTRAINT chk_response_size CHECK (response_size_bytes >= 0)
 );
 
 -- 2. 로그인 세션 테이블 생성
@@ -136,19 +131,19 @@ CREATE TABLE IF NOT EXISTS bms.user_sessions (
     last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     expires_at TIMESTAMP WITH TIME ZONE,
     
-    -- 클라이언트 정보
+    -- 접근 정보
     client_ip INET,
     user_agent TEXT,
-    device_fingerprint VARCHAR(100),                    -- 디바이스 지문
+    device_fingerprint VARCHAR(500),                    -- 디바이스 지문
     
     -- 상태 정보
     is_active BOOLEAN DEFAULT true,
     logout_reason VARCHAR(50),                          -- 로그아웃 사유
     
     -- 보안 정보
-    login_method VARCHAR(20) DEFAULT 'PASSWORD',        -- 로그인 방법
+    login_method VARCHAR(20) DEFAULT 'PASSWORD',        -- 로그인 방식
     mfa_verified BOOLEAN DEFAULT false,                 -- MFA 인증 여부
-    is_suspicious BOOLEAN DEFAULT false,
+    is_trusted_device BOOLEAN DEFAULT false,            -- 신뢰할 수 있는 디바이스 여부
     
     -- 제약조건
     CONSTRAINT fk_user_sessions_company FOREIGN KEY (company_id) REFERENCES bms.companies(company_id) ON DELETE CASCADE,
@@ -168,51 +163,51 @@ CREATE TABLE IF NOT EXISTS bms.security_event_logs (
     event_type VARCHAR(50) NOT NULL,                    -- 이벤트 유형
     event_severity VARCHAR(20) NOT NULL,                -- 심각도
     event_description TEXT NOT NULL,                    -- 이벤트 설명
-    event_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    event_source VARCHAR(100),                          -- 이벤트 소스
     
     -- 사용자 정보
     user_id UUID,
     user_name VARCHAR(100),
     user_ip INET,
     
-    -- 상세 정보
-    event_details JSONB,                                -- 이벤트 상세 정보
-    affected_resources TEXT[],                          -- 영향받은 리소스
+    -- 위협 정보
+    threat_type VARCHAR(50),                            -- 위협 유형
+    attack_vector VARCHAR(100),                         -- 공격 벡터
+    indicators_of_compromise TEXT[],                    -- 침해 지표
     
     -- 대응 정보
-    is_resolved BOOLEAN DEFAULT false,                  -- 해결 여부
-    resolution_notes TEXT,                              -- 해결 노트
-    resolved_by UUID,                                   -- 해결자 ID
+    response_action VARCHAR(100),                       -- 대응 조치
+    response_status VARCHAR(20) DEFAULT 'PENDING',      -- 대응 상태
+    assigned_to UUID,                                   -- 담당자
     resolved_at TIMESTAMP WITH TIME ZONE,              -- 해결 시간
     
-    -- 알림 정보
-    notification_sent BOOLEAN DEFAULT false,           -- 알림 발송 여부
-    notification_recipients TEXT[],                     -- 알림 수신자
+    -- 추가 정보
+    additional_data JSONB,                              -- 추가 데이터
+    
+    -- 시간 정보
+    event_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     -- 제약조건
     CONSTRAINT fk_security_events_company FOREIGN KEY (company_id) REFERENCES bms.companies(company_id) ON DELETE CASCADE,
     CONSTRAINT fk_security_events_user FOREIGN KEY (user_id) REFERENCES bms.users(user_id) ON DELETE SET NULL,
-    CONSTRAINT fk_security_events_resolver FOREIGN KEY (resolved_by) REFERENCES bms.users(user_id) ON DELETE SET NULL,
+    CONSTRAINT fk_security_events_assigned FOREIGN KEY (assigned_to) REFERENCES bms.users(user_id) ON DELETE SET NULL,
     
     -- 체크 제약조건
     CONSTRAINT chk_event_type CHECK (event_type IN (
-        'FAILED_LOGIN',         -- 로그인 실패
-        'BRUTE_FORCE',          -- 무차별 대입 공격
-        'SUSPICIOUS_IP',        -- 의심스러운 IP
-        'PRIVILEGE_ESCALATION', -- 권한 상승
-        'DATA_BREACH',          -- 데이터 유출
-        'UNAUTHORIZED_ACCESS',  -- 무단 접근
-        'MALWARE_DETECTED',     -- 악성코드 탐지
-        'SQL_INJECTION',        -- SQL 인젝션
-        'XSS_ATTACK',           -- XSS 공격
-        'CSRF_ATTACK',          -- CSRF 공격
-        'ACCOUNT_LOCKOUT',      -- 계정 잠금
-        'PASSWORD_POLICY_VIOLATION', -- 비밀번호 정책 위반
-        'SESSION_HIJACKING',    -- 세션 하이재킹
-        'API_ABUSE',            -- API 남용
-        'RATE_LIMIT_EXCEEDED'   -- 요청 한도 초과
+        'FAILED_LOGIN_ATTEMPT',     -- 로그인 실패 시도
+        'BRUTE_FORCE_ATTACK',       -- 무차별 대입 공격
+        'SUSPICIOUS_IP_ACCESS',     -- 의심스러운 IP 접근
+        'PRIVILEGE_ESCALATION',     -- 권한 상승
+        'DATA_EXFILTRATION',        -- 데이터 유출
+        'MALWARE_DETECTION',        -- 악성코드 탐지
+        'UNAUTHORIZED_ACCESS',      -- 무단 접근
+        'POLICY_VIOLATION',         -- 정책 위반
+        'ANOMALY_DETECTION',        -- 이상 행위 탐지
+        'SYSTEM_COMPROMISE'         -- 시스템 침해
     )),
-    CONSTRAINT chk_event_severity CHECK (event_severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'))
+    CONSTRAINT chk_event_severity CHECK (event_severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    CONSTRAINT chk_response_status CHECK (response_status IN ('PENDING', 'IN_PROGRESS', 'RESOLVED', 'DISMISSED'))
 );
 
 -- 4. RLS 정책 활성화
@@ -234,17 +229,19 @@ CREATE POLICY security_event_logs_isolation_policy ON bms.security_event_logs
     USING (company_id = (current_setting('app.current_company_id', true))::uuid);
 
 -- 6. 성능 최적화 인덱스 생성
--- 사용자 활동 로그 테이블 인덱스
-CREATE INDEX idx_user_activity_company_id ON bms.user_activity_logs(company_id);
-CREATE INDEX idx_user_activity_user_id ON bms.user_activity_logs(user_id);
-CREATE INDEX idx_user_activity_type ON bms.user_activity_logs(activity_type);
-CREATE INDEX idx_user_activity_category ON bms.user_activity_logs(activity_category);
-CREATE INDEX idx_user_activity_created_at ON bms.user_activity_logs(created_at DESC);
-CREATE INDEX idx_user_activity_client_ip ON bms.user_activity_logs(client_ip);
-CREATE INDEX idx_user_activity_session_id ON bms.user_activity_logs(session_id);
-CREATE INDEX idx_user_activity_suspicious ON bms.user_activity_logs(is_suspicious) WHERE is_suspicious = true;
+-- 사용자 활동 로그 인덱스
+CREATE INDEX idx_user_activity_logs_company_id ON bms.user_activity_logs(company_id);
+CREATE INDEX idx_user_activity_logs_user_id ON bms.user_activity_logs(user_id);
+CREATE INDEX idx_user_activity_logs_activity_type ON bms.user_activity_logs(activity_type);
+CREATE INDEX idx_user_activity_logs_activity_category ON bms.user_activity_logs(activity_category);
+CREATE INDEX idx_user_activity_logs_timestamp ON bms.user_activity_logs(created_at DESC);
+CREATE INDEX idx_user_activity_logs_session_id ON bms.user_activity_logs(session_id);
+CREATE INDEX idx_user_activity_logs_client_ip ON bms.user_activity_logs(client_ip);
+-- building_id 컬럼이 없으므로 인덱스 생성 생략
+CREATE INDEX idx_user_activity_logs_is_suspicious ON bms.user_activity_logs(is_suspicious);
+CREATE INDEX idx_user_activity_logs_risk_score ON bms.user_activity_logs(risk_score DESC);
 
--- 사용자 세션 테이블 인덱스
+-- 사용자 세션 인덱스
 CREATE INDEX idx_user_sessions_company_id ON bms.user_sessions(company_id);
 CREATE INDEX idx_user_sessions_user_id ON bms.user_sessions(user_id);
 CREATE INDEX idx_user_sessions_is_active ON bms.user_sessions(is_active);
@@ -252,31 +249,34 @@ CREATE INDEX idx_user_sessions_expires_at ON bms.user_sessions(expires_at);
 CREATE INDEX idx_user_sessions_last_activity ON bms.user_sessions(last_activity_at DESC);
 CREATE INDEX idx_user_sessions_client_ip ON bms.user_sessions(client_ip);
 
--- 보안 이벤트 로그 테이블 인덱스
+-- 보안 이벤트 로그 인덱스
 CREATE INDEX idx_security_events_company_id ON bms.security_event_logs(company_id);
-CREATE INDEX idx_security_events_type ON bms.security_event_logs(event_type);
+CREATE INDEX idx_security_events_event_type ON bms.security_event_logs(event_type);
 CREATE INDEX idx_security_events_severity ON bms.security_event_logs(event_severity);
 CREATE INDEX idx_security_events_timestamp ON bms.security_event_logs(event_timestamp DESC);
 CREATE INDEX idx_security_events_user_id ON bms.security_event_logs(user_id);
-CREATE INDEX idx_security_events_resolved ON bms.security_event_logs(is_resolved);
+CREATE INDEX idx_security_events_is_resolved ON bms.security_event_logs(is_resolved);
+CREATE INDEX idx_security_events_resolved_by ON bms.security_event_logs(resolved_by);
 
 -- 복합 인덱스
 CREATE INDEX idx_user_activity_company_user ON bms.user_activity_logs(company_id, user_id);
-CREATE INDEX idx_user_activity_company_date ON bms.user_activity_logs(company_id, created_at DESC);
-CREATE INDEX idx_user_activity_type_date ON bms.user_activity_logs(activity_type, created_at DESC);
+CREATE INDEX idx_user_activity_company_timestamp ON bms.user_activity_logs(company_id, created_at DESC);
+CREATE INDEX idx_user_activity_type_timestamp ON bms.user_activity_logs(activity_type, created_at DESC);
+CREATE INDEX idx_user_sessions_user_active ON bms.user_sessions(user_id, is_active);
 CREATE INDEX idx_security_events_company_severity ON bms.security_event_logs(company_id, event_severity);
 
 -- 7. 사용자 활동 로그 기록 함수
 CREATE OR REPLACE FUNCTION bms.log_user_activity(
-    p_activity_type VARCHAR(50),
-    p_activity_category VARCHAR(30),
     p_user_id UUID DEFAULT NULL,
+    p_activity_type VARCHAR(50) DEFAULT 'CUSTOM',
+    p_activity_category VARCHAR(30) DEFAULT 'BUSINESS_OPERATION',
     p_activity_description TEXT DEFAULT NULL,
     p_activity_result VARCHAR(20) DEFAULT 'SUCCESS',
-    p_request_url TEXT DEFAULT NULL,
-    p_response_status INTEGER DEFAULT 200,
     p_business_context VARCHAR(100) DEFAULT NULL,
-    p_feature_used VARCHAR(100) DEFAULT NULL
+    p_resource_type VARCHAR(50) DEFAULT NULL,
+    p_resource_id UUID DEFAULT NULL,
+    p_building_id UUID DEFAULT NULL,
+    p_metadata JSONB DEFAULT NULL
 )
 RETURNS UUID AS $$
 DECLARE
@@ -286,6 +286,8 @@ DECLARE
     v_user_email VARCHAR(255);
     v_user_role VARCHAR(50);
     v_session_id VARCHAR(100);
+    v_client_ip INET;
+    v_user_agent TEXT;
 BEGIN
     -- 현재 회사 ID 가져오기
     v_company_id := (current_setting('app.current_company_id', true))::uuid;
@@ -301,8 +303,15 @@ BEGIN
         LIMIT 1;
     END IF;
     
-    -- 세션 ID 가져오기
-    v_session_id := current_setting('app.session_id', true);
+    -- 세션 정보 가져오기
+    BEGIN
+        v_session_id := current_setting('app.session_id', true);
+        v_client_ip := inet_client_addr();
+        v_user_agent := current_setting('app.user_agent', true);
+    EXCEPTION WHEN OTHERS THEN
+        -- 설정이 없는 경우 무시
+        NULL;
+    END;
     
     -- 활동 로그 생성
     v_activity_id := gen_random_uuid();
@@ -310,16 +319,15 @@ BEGIN
     INSERT INTO bms.user_activity_logs (
         activity_id, company_id, user_id, user_name, user_email, user_role,
         activity_type, activity_category, activity_description, activity_result,
-        session_id, request_url, response_status,
-        client_ip, user_agent,
-        business_context, feature_used
+        session_id, client_ip, user_agent,
+        business_context, resource_type, resource_id, building_id,
+        metadata
     ) VALUES (
         v_activity_id, v_company_id, p_user_id, v_user_name, v_user_email, v_user_role,
         p_activity_type, p_activity_category, p_activity_description, p_activity_result,
-        v_session_id, p_request_url, p_response_status,
-        inet_client_addr(),
-        current_setting('app.user_agent', true),
-        p_business_context, p_feature_used
+        v_session_id, v_client_ip, v_user_agent,
+        p_business_context, p_resource_type, p_resource_id, p_building_id,
+        p_metadata
     );
     
     RETURN v_activity_id;
@@ -332,14 +340,16 @@ CREATE OR REPLACE FUNCTION bms.log_security_event(
     p_event_severity VARCHAR(20),
     p_event_description TEXT,
     p_user_id UUID DEFAULT NULL,
-    p_event_details JSONB DEFAULT NULL,
-    p_affected_resources TEXT[] DEFAULT NULL
+    p_threat_type VARCHAR(50) DEFAULT NULL,
+    p_attack_vector VARCHAR(100) DEFAULT NULL,
+    p_additional_data JSONB DEFAULT NULL
 )
 RETURNS UUID AS $$
 DECLARE
     v_event_id UUID;
     v_company_id UUID;
     v_user_name VARCHAR(100);
+    v_client_ip INET;
 BEGIN
     -- 현재 회사 ID 가져오기
     v_company_id := (current_setting('app.current_company_id', true))::uuid;
@@ -351,24 +361,25 @@ BEGIN
         WHERE user_id = p_user_id;
     END IF;
     
+    -- 클라이언트 IP 가져오기
+    BEGIN
+        v_client_ip := inet_client_addr();
+    EXCEPTION WHEN OTHERS THEN
+        v_client_ip := NULL;
+    END;
+    
     -- 보안 이벤트 로그 생성
     v_event_id := gen_random_uuid();
     
     INSERT INTO bms.security_event_logs (
         event_id, company_id, event_type, event_severity, event_description,
         user_id, user_name, user_ip,
-        event_details, affected_resources
+        threat_type, attack_vector, additional_data
     ) VALUES (
         v_event_id, v_company_id, p_event_type, p_event_severity, p_event_description,
-        p_user_id, v_user_name, inet_client_addr(),
-        p_event_details, p_affected_resources
+        p_user_id, v_user_name, v_client_ip,
+        p_threat_type, p_attack_vector, p_additional_data
     );
-    
-    -- 심각도가 HIGH 이상인 경우 알림 처리 (향후 구현)
-    IF p_event_severity IN ('HIGH', 'CRITICAL') THEN
-        -- 알림 로직 추가 예정
-        RAISE NOTICE '심각한 보안 이벤트 발생: % - %', p_event_type, p_event_description;
-    END IF;
     
     RETURN v_event_id;
 END;
@@ -385,12 +396,25 @@ RETURNS VARCHAR(100) AS $$
 DECLARE
     v_session_id VARCHAR(100);
     v_company_id UUID;
+    v_client_ip INET;
+    v_user_agent TEXT;
 BEGIN
     -- 세션 ID 생성
     v_session_id := 'sess_' || substr(md5(random()::text), 1, 32);
     
     -- 현재 회사 ID 가져오기
-    v_company_id := (current_setting('app.current_company_id', true))::uuid;
+    SELECT company_id INTO v_company_id
+    FROM bms.users
+    WHERE user_id = p_user_id;
+    
+    -- 클라이언트 정보 가져오기
+    BEGIN
+        v_client_ip := inet_client_addr();
+        v_user_agent := current_setting('app.user_agent', true);
+    EXCEPTION WHEN OTHERS THEN
+        -- 설정이 없는 경우 무시
+        NULL;
+    END;
     
     -- 세션 생성
     INSERT INTO bms.user_sessions (
@@ -398,13 +422,13 @@ BEGIN
         client_ip, user_agent, login_method
     ) VALUES (
         v_session_id, v_company_id, p_user_id, p_session_token, p_expires_at,
-        inet_client_addr(), current_setting('app.user_agent', true), p_login_method
+        v_client_ip, v_user_agent, p_login_method
     );
     
     -- 로그인 활동 기록
     PERFORM bms.log_user_activity(
         p_user_id, 'LOGIN', 'AUTHENTICATION', '사용자 로그인', 'SUCCESS',
-        NULL, 200, 'USER_SESSION', 'LOGIN'
+        'USER_SESSION', 'SESSION', v_session_id::uuid
     );
     
     RETURN v_session_id;
@@ -424,7 +448,9 @@ SELECT
     MIN(ual.created_at) as first_activity,
     MAX(ual.created_at) as last_activity,
     COUNT(DISTINCT DATE(ual.created_at)) as active_days,
-    AVG(ual.response_time) as avg_response_time
+    AVG(ual.response_time) as avg_response_time,
+    SUM(CASE WHEN ual.activity_result = 'FAILURE' THEN 1 ELSE 0 END) as failure_count,
+    SUM(CASE WHEN ual.is_suspicious THEN 1 ELSE 0 END) as suspicious_count
 FROM bms.user_activity_logs ual
 JOIN bms.companies c ON ual.company_id = c.company_id
 WHERE ual.created_at >= CURRENT_DATE - INTERVAL '30 days'
@@ -435,27 +461,27 @@ ORDER BY activity_count DESC;
 -- RLS 정책이 뷰에도 적용되도록 설정
 ALTER VIEW bms.v_user_activity_summary OWNER TO qiro;
 
--- 11. 보안 이벤트 통계 뷰 생성
-CREATE OR REPLACE VIEW bms.v_security_event_summary AS
+-- 11. 보안 대시보드 뷰 생성
+CREATE OR REPLACE VIEW bms.v_security_dashboard AS
 SELECT 
     sel.company_id,
     c.company_name,
     sel.event_type,
     sel.event_severity,
     COUNT(*) as event_count,
-    COUNT(CASE WHEN sel.is_resolved THEN 1 END) as resolved_count,
-    COUNT(CASE WHEN NOT sel.is_resolved THEN 1 END) as unresolved_count,
-    MIN(sel.event_timestamp) as first_event,
-    MAX(sel.event_timestamp) as last_event,
-    AVG(EXTRACT(EPOCH FROM (sel.resolved_at - sel.event_timestamp))/3600) as avg_resolution_hours
+    COUNT(DISTINCT sel.user_id) as affected_users,
+    MIN(sel.event_timestamp) as first_occurrence,
+    MAX(sel.event_timestamp) as last_occurrence,
+    SUM(CASE WHEN sel.is_resolved = true THEN 1 ELSE 0 END) as resolved_count,
+    SUM(CASE WHEN sel.is_resolved = false THEN 1 ELSE 0 END) as pending_count
 FROM bms.security_event_logs sel
 JOIN bms.companies c ON sel.company_id = c.company_id
-WHERE sel.event_timestamp >= CURRENT_DATE - INTERVAL '30 days'
+WHERE sel.event_timestamp >= CURRENT_DATE - INTERVAL '7 days'
 GROUP BY sel.company_id, c.company_name, sel.event_type, sel.event_severity
 ORDER BY event_count DESC;
 
 -- RLS 정책이 뷰에도 적용되도록 설정
-ALTER VIEW bms.v_security_event_summary OWNER TO qiro;
+ALTER VIEW bms.v_security_dashboard OWNER TO qiro;
 
 -- 12. 세션 정리 함수 (만료된 세션 삭제)
 CREATE OR REPLACE FUNCTION bms.cleanup_expired_sessions()
@@ -466,7 +492,7 @@ BEGIN
     -- 만료된 세션 삭제
     DELETE FROM bms.user_sessions
     WHERE expires_at < NOW()
-       OR (last_activity_at < NOW() - INTERVAL '7 days' AND is_active = false);
+       OR (last_activity_at < NOW() - INTERVAL '30 days' AND is_active = false);
     
     GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
     

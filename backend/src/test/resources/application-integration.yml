@@ -1,0 +1,109 @@
+# 통합 테스트용 설정
+spring:
+  profiles:
+    active: integration
+  
+  # 테스트용 H2 데이터베이스 설정
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+  
+  # JPA 설정
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.H2Dialect
+  
+  # H2 콘솔 활성화 (테스트 디버깅용)
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  
+  # 테스트용 보안 설정
+  security:
+    user:
+      name: test
+      password: test
+      roles: ADMIN
+
+# 로깅 설정
+logging:
+  level:
+    com.qiro: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.springframework.transaction: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# 통합 테스트 전용 설정
+qiro:
+  test:
+    # 테스트 데이터 자동 생성
+    auto-generate-test-data: true
+    # 테스트 완료 후 데이터 정리
+    cleanup-after-test: true
+    # 테스트 실행 시간 제한 (초)
+    execution-timeout: 300
+    # 병렬 테스트 실행
+    parallel-execution: false
+  
+  # 통합 서비스 테스트 설정
+  integrated-services:
+    data-integrity:
+      enabled: true
+      test-mode: true
+      check-interval: 10 # 테스트용 짧은 간격
+    performance-monitoring:
+      enabled: true
+      test-mode: true
+      metric-collection-interval: 5 # 테스트용 짧은 간격
+    test-execution:
+      enabled: true
+      test-mode: true
+      max-test-history: 10 # 테스트용 작은 히스토리
+
+# 테스트용 외부 서비스 Mock 설정
+external-services:
+  sms:
+    enabled: false
+    mock: true
+  email:
+    enabled: false
+    mock: true
+  push-notification:
+    enabled: false
+    mock: true
+
+# 테스트 성능 임계값 설정
+performance-thresholds:
+  database:
+    connection-time-ms: 100
+    query-time-ms: 500
+  api:
+    response-time-ms: 1000
+  cache:
+    hit-rate-percent: 80.0
+  memory:
+    heap-usage-percent: 80.0
+
+# 테스트 데이터 설정
+test-data:
+  companies:
+    count: 3
+  users:
+    count: 10
+  facilities:
+    count: 20
+  work-orders:
+    count: 50
+  fault-reports:
+    count: 30

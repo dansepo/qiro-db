@@ -1,0 +1,278 @@
+spring:
+  application:
+    name: qiro-backend
+  
+  profiles:
+    active: local
+  
+  datasource:
+    url: jdbc:postgresql://59.1.24.88:65432/qiro_dev
+    username: qiro
+    password: p@ssword
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: bms
+    open-in-view: false
+  
+  security:
+    jwt:
+      secret: ${JWT_SECRET:qiro-jwt-secret-key-for-development-only-change-in-production}
+      access-token-expiration: 3600000  # 1시간 (밀리초)
+      refresh-token-expiration: 604800000  # 7일 (밀리초)
+  
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: NON_NULL
+    time-zone: Asia/Seoul
+  
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 50MB
+      enabled: true
+  
+  # 스케줄러 설정
+  task:
+    scheduling:
+      enabled: true
+      pool:
+        size: 5
+
+# 파일 저장소 설정
+app:
+  file-storage:
+    upload-dir: uploads
+    thumbnail-dir: thumbnails
+    max-file-size: 10485760  # 10MB
+    thumbnail-max-width: 300
+    thumbnail-max-height: 300
+    thumbnail-quality: 0.8
+    allowed-image-types:
+      - image/jpeg
+      - image/jpg
+      - image/png
+      - image/gif
+      - image/webp
+      - image/bmp
+    allowed-video-types:
+      - video/mp4
+      - video/avi
+      - video/mov
+      - video/wmv
+      - video/webm
+      - video/mkv
+    allowed-document-types:
+      - application/pdf
+      - application/msword
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - application/vnd.ms-excel
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      - application/vnd.ms-powerpoint
+      - application/vnd.openxmlformats-officedocument.presentationml.presentation
+      - text/plain
+      - text/csv
+    dangerous-extensions:
+      - exe
+      - bat
+      - cmd
+      - com
+      - pif
+      - scr
+      - vbs
+      - js
+      - jar
+      - sh
+      - ps1
+
+  # 알림 시스템 설정
+  notification:
+    email:
+      enabled: true
+      smtp:
+        host: smtp.gmail.com
+        port: 587
+        username: ${SMTP_USERNAME:}
+        password: ${SMTP_PASSWORD:}
+        auth: true
+        starttls: true
+      from:
+        address: noreply@qiro.com
+        name: Qiro 시설관리시스템
+    sms:
+      enabled: true
+      provider: ${SMS_PROVIDER:mock}
+      api-key: ${SMS_API_KEY:}
+      api-secret: ${SMS_API_SECRET:}
+      sender-number: ${SMS_SENDER_NUMBER:}
+    push:
+      enabled: true
+      fcm:
+        server-key: ${FCM_SERVER_KEY:}
+        project-id: ${FCM_PROJECT_ID:}
+      apns:
+        key-id: ${APNS_KEY_ID:}
+        team-id: ${APNS_TEAM_ID:}
+        bundle-id: ${APNS_BUNDLE_ID:}
+        key-path: ${APNS_KEY_PATH:}
+    retry:
+      max-attempts: 3
+      initial-delay: 300000  # 5분
+      max-delay: 1800000     # 30분
+      multiplier: 2.0
+    rate-limit:
+      daily-limit: 1000
+      hourly-limit: 100
+      per-minute-limit: 10
+  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  
+logging:
+  level:
+    com.qiro: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%logger{36}] - %msg%n"
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+  error:
+    include-stacktrace: never
+    include-message: always
+
+# OpenAPI/Swagger 설정
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+    groups:
+      enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    display-request-duration: true
+    groups-order: ASC
+    operations-sorter: alpha
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+    show-extensions: true
+    show-common-extensions: true
+    default-models-expand-depth: 1
+    default-model-expand-depth: 1
+    doc-expansion: none
+    disable-swagger-default-url: true
+    use-root-path: true
+    oauth:
+      client-id: qiro-client
+      client-secret: qiro-secret
+      realm: qiro
+      app-name: Qiro 시설관리시스템
+      scopes:
+        - read
+        - write
+  show-actuator: true
+  group-configs:
+    - group: all
+      display-name: "전체 API"
+      paths-to-match: 
+        - "/api/v1/**"
+      packages-to-scan:
+        - com.qiro.domain
+        - com.qiro.common.controller
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+  writer-with-default-pretty-printer: true
+  model-and-view-allowed: true
+  override-with-generic-response: false
+  remove-broken-reference-definitions: false
+  auto-tag-classes: true
+  disable-i18n: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  
+  datasource:
+    url: jdbc:postgresql://59.1.24.88:65432/qiro_dev
+    username: qiro
+    password: p@ssword
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  
+  datasource:
+    url: jdbc:h2:mem:testdb
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+  
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  
+  h2:
+    console:
+      enabled: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  
+  datasource:
+    url: ${PROD_DB_URL}
+    username: ${PROD_DB_USERNAME}
+    password: ${PROD_DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  
+logging:
+  level:
+    com.qiro: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN

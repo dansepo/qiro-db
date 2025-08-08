@@ -1,0 +1,328 @@
+# 프로덕션 환경 설정
+spring:
+  config:
+    activate:
+      on-profile: prod
+  
+  # 데이터베이스 설정
+  datasource:
+    url: ${PROD_DB_URL:jdbc:postgresql://prod-db.qiro.com:5432/qiro_prod}
+    username: ${PROD_DB_USERNAME:qiro_prod}
+    password: ${PROD_DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
+      pool-name: QiroHikariCP-Prod
+  
+  # JPA 설정
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        default_schema: bms
+        jdbc:
+          batch_size: 50
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+    open-in-view: false
+  
+  # 보안 설정
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+      access-token-expiration: 3600000  # 1시간
+      refresh-token-expiration: 604800000  # 7일
+  
+  # 파일 업로드 설정
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 50MB
+      enabled: true
+  
+  # 캐시 설정
+  cache:
+    type: redis
+    redis:
+      host: ${REDIS_HOST:prod-redis.qiro.com}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 2000ms
+
+# 파일 저장소 설정 (프로덕션)
+app:
+  file-storage:
+    upload-dir: ${FILE_STORAGE_PATH:/app/uploads}
+    thumbnail-dir: ${THUMBNAIL_STORAGE_PATH:/app/thumbnails}
+    max-file-size: 10485760  # 10MB
+    thumbnail-max-width: 300
+    thumbnail-max-height: 300
+    thumbnail-quality: 0.8
+    # S3 설정 (선택사항)
+    s3:
+      enabled: ${S3_ENABLED:false}
+      bucket-name: ${S3_BUCKET_NAME:qiro-facility-files}
+      region: ${S3_REGION:ap-northeast-2}
+      access-key: ${S3_ACCESS_KEY}
+      secret-key: ${S3_SECRET_KEY}
+      endpoint: ${S3_ENDPOINT:}
+      path-style-access: false
+  
+  # 알림 시스템 설정 (프로덕션)
+  notification:
+    email:
+      enabled: true
+      smtp:
+        host: ${SMTP_HOST:smtp.gmail.com}
+        port: ${SMTP_PORT:587}
+        username: ${SMTP_USERNAME}
+        password: ${SMTP_PASSWORD}
+        auth: true
+        starttls: true
+        ssl-trust: "*"
+      from:
+        address: ${EMAIL_FROM_ADDRESS:noreply@qiro.com}
+        name: ${EMAIL_FROM_NAME:Qiro 시설관리시스템}
+      templates:
+        path: ${EMAIL_TEMPLATE_PATH:/app/templates/email}
+    
+    sms:
+      enabled: true
+      provider: ${SMS_PROVIDER:aligo}  # aligo, coolsms, etc.
+      api-key: ${SMS_API_KEY}
+      api-secret: ${SMS_API_SECRET}
+      sender-number: ${SMS_SENDER_NUMBER}
+      test-mode: false
+    
+    push:
+      enabled: true
+      fcm:
+        server-key: ${FCM_SERVER_KEY}
+        project-id: ${FCM_PROJECT_ID}
+      apns:
+        key-id: ${APNS_KEY_ID}
+        team-id: ${APNS_TEAM_ID}
+        bundle-id: ${APNS_BUNDLE_ID}
+        key-path: ${APNS_KEY_PATH}
+        production: true
+    
+    retry:
+      max-attempts: 5
+      initial-delay: 300000  # 5분
+      max-delay: 3600000     # 1시간
+      multiplier: 2.0
+    
+    rate-limit:
+      daily-limit: 10000
+      hourly-limit: 1000
+      per-minute-limit: 50
+
+# 모니터링 및 관리 (프로덕션)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+      show-components: when-authorized
+      probes:
+        enabled: true
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        step: 30s
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+      sla:
+        http.server.requests: 100ms, 500ms, 1s
+  health:
+    db:
+      enabled: true
+    redis:
+      enabled: true
+    diskspace:
+      enabled: true
+      threshold: 1GB
+
+# 로깅 설정 (프로덕션)
+logging:
+  level:
+    root: INFO
+    com.qiro: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.springframework.web: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] [%logger{36}] - %msg%n"
+  file:
+    name: ${LOG_FILE_PATH:/app/logs/qiro-backend.log}
+    max-size: 100MB
+    max-history: 30
+    total-size-cap: 3GB
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      max-history: 30
+      total-size-cap: 3GB
+
+# 서버 설정 (프로덕션)
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /api
+  error:
+    include-stacktrace: never
+    include-message: always
+    include-binding-errors: never
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,text/css,text/javascript,application/javascript
+    min-response-size: 1024
+  http2:
+    enabled: true
+  forward-headers-strategy: framework
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 10
+    max-connections: 8192
+    accept-count: 100
+    connection-timeout: 20000
+    keep-alive-timeout: 20000
+    max-keep-alive-requests: 100
+    threads:
+      max: 200
+      min-spare: 10
+    accesslog:
+      enabled: true
+      directory: ${LOG_FILE_PATH:/app/logs}
+      file-date-format: .yyyy-MM-dd
+      pattern: "%h %l %u %t \"%r\" %s %b %D \"%{Referer}i\" \"%{User-Agent}i\""
+      prefix: access_log
+      suffix: .log
+
+# OpenAPI/Swagger 설정 (프로덕션)
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}  # 프로덕션에서는 기본적으로 비활성화
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SWAGGER_UI_ENABLED:false}  # 프로덕션에서는 기본적으로 비활성화
+    path: /swagger-ui.html
+  show-actuator: false
+
+# 보안 헤더 설정
+security:
+  headers:
+    frame-options: DENY
+    content-type-options: nosniff
+    xss-protection: "1; mode=block"
+    referrer-policy: strict-origin-when-cross-origin
+    permissions-policy: "geolocation=(), microphone=(), camera=()"
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://qiro.com,https://www.qiro.com,https://admin.qiro.com}
+    allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+    allowed-headers: "*"
+    allow-credentials: true
+    max-age: 3600
+
+# 외부 서비스 연동 설정
+external:
+  # 사업자등록번호 검증 API
+  business-verification:
+    enabled: true
+    api-url: ${BUSINESS_VERIFICATION_API_URL:https://api.odcloud.kr/api/nts-businessman/v1/status}
+    api-key: ${BUSINESS_VERIFICATION_API_KEY}
+    timeout: 10000
+    retry-count: 3
+  
+  # 지도 서비스 API
+  map:
+    provider: ${MAP_PROVIDER:kakao}  # kakao, naver, google
+    api-key: ${MAP_API_KEY}
+    timeout: 5000
+  
+  # 결제 서비스 API
+  payment:
+    provider: ${PAYMENT_PROVIDER:iamport}
+    api-key: ${PAYMENT_API_KEY}
+    api-secret: ${PAYMENT_API_SECRET}
+    webhook-url: ${PAYMENT_WEBHOOK_URL:https://api.qiro.com/api/v1/payments/webhook}
+
+# 성능 튜닝 설정
+performance:
+  # 데이터베이스 연결 풀 모니터링
+  hikari:
+    leak-detection-threshold: 60000
+    connection-test-query: SELECT 1
+    validation-timeout: 5000
+  
+  # JVM 튜닝 권장사항
+  jvm:
+    heap-size: "-Xms2g -Xmx4g"
+    gc-options: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+UseZGC"
+    monitoring: "-XX:+FlightRecorder -XX:StartFlightRecording=duration=60s,filename=flight.jfr"
+  
+  # 캐시 설정
+  cache:
+    ttl:
+      user-info: 300  # 5분
+      building-info: 1800  # 30분
+      asset-info: 3600  # 1시간
+      system-codes: 86400  # 24시간
+
+# 백업 및 복구 설정
+backup:
+  enabled: ${BACKUP_ENABLED:true}
+  schedule: ${BACKUP_SCHEDULE:0 2 * * *}  # 매일 새벽 2시
+  retention-days: ${BACKUP_RETENTION_DAYS:30}
+  storage:
+    type: ${BACKUP_STORAGE_TYPE:s3}  # local, s3, gcs
+    path: ${BACKUP_STORAGE_PATH:/backups}
+    s3:
+      bucket: ${BACKUP_S3_BUCKET:qiro-backups}
+      region: ${BACKUP_S3_REGION:ap-northeast-2}
+
+# 환경별 기능 플래그
+feature-flags:
+  # 새로운 기능들의 활성화 여부
+  new-dashboard: ${FEATURE_NEW_DASHBOARD:true}
+  mobile-app-support: ${FEATURE_MOBILE_APP:true}
+  advanced-analytics: ${FEATURE_ADVANCED_ANALYTICS:true}
+  ai-recommendations: ${FEATURE_AI_RECOMMENDATIONS:false}
+  
+  # 실험적 기능들
+  experimental:
+    auto-scheduling: ${FEATURE_AUTO_SCHEDULING:false}
+    predictive-maintenance: ${FEATURE_PREDICTIVE_MAINTENANCE:false}
+    iot-integration: ${FEATURE_IOT_INTEGRATION:false}
