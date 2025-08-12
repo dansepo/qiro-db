@@ -1,6 +1,7 @@
 package com.qiro.domain.accounting.repository
 
 import com.qiro.domain.accounting.entity.IncomeRecord
+import com.qiro.domain.accounting.entity.IncomeStatus
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
@@ -40,7 +41,7 @@ interface IncomeRecordRepository : JpaRepository<IncomeRecord, UUID> {
     /**
      * 상태별 수입 기록 조회
      */
-    fun findByCompanyIdAndStatus(companyId: UUID, status: IncomeRecord.Status): List<IncomeRecord>
+    fun findByCompanyIdAndStatus(companyId: UUID, status: IncomeStatus): List<IncomeRecord>
 
     /**
      * 건물별 수입 기록 조회

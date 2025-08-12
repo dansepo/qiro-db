@@ -104,8 +104,8 @@ data class WorkOrderPartUsageDto(
                 isApproved = entity.isApproved(),
                 hasBatchTracking = entity.hasBatchTracking(),
                 hasSerialTracking = entity.hasSerialTracking(),
-                createdAt = entity.createdAt,
-                updatedAt = entity.updatedAt,
+                createdAt = entity.createdAt ?: LocalDateTime.now(),
+                updatedAt = entity.updatedAt ?: LocalDateTime.now(),
                 createdBy = entity.createdBy,
                 updatedBy = entity.updatedBy
             )

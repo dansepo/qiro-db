@@ -1,6 +1,8 @@
 package com.qiro.domain.accounting.repository
 
 import com.qiro.domain.accounting.entity.ExpenseRecord
+import com.qiro.domain.accounting.entity.ApprovalStatus
+import com.qiro.domain.accounting.entity.ExpenseStatus
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
@@ -40,14 +42,14 @@ interface ExpenseRecordRepository : JpaRepository<ExpenseRecord, UUID> {
     /**
      * 상태별 지출 기록 조회
      */
-    fun findByCompanyIdAndStatus(companyId: UUID, status: ExpenseRecord.Status): List<ExpenseRecord>
+    fun findByCompanyIdAndStatus(companyId: UUID, status: ExpenseStatus): List<ExpenseRecord>
 
     /**
      * 승인 상태별 지출 기록 조회
      */
     fun findByCompanyIdAndApprovalStatus(
         companyId: UUID, 
-        approvalStatus: ExpenseRecord.ApprovalStatus
+        approvalStatus: ApprovalStatus
     ): List<ExpenseRecord>
 
     /**
@@ -243,7 +245,7 @@ interface ExpenseRecordRepository : JpaRepository<ExpenseRecord, UUID> {
         @Param("endDate") endDate: LocalDate?,
         @Param("expenseTypeId") expenseTypeId: UUID?,
         @Param("vendorId") vendorId: UUID?,
-        @Param("status") status: com.qiro.domain.accounting.entity.ExpenseStatus?
+        @Param("status") status: ExpenseStatus?
     ): List<ExpenseRecord>
 
     /**
@@ -321,7 +323,7 @@ interface ExpenseRecordRepository : JpaRepository<ExpenseRecord, UUID> {
     """)
     fun countByCompanyIdAndApprovalStatus(
         @Param("companyId") companyId: UUID,
-        @Param("approvalStatus") approvalStatus: com.qiro.domain.accounting.entity.ApprovalStatus
+        @Param("approvalStatus") approvalStatus: ApprovalStatus
     ): Int
 
     /**
@@ -337,4 +339,9 @@ interface ExpenseRecordRepository : JpaRepository<ExpenseRecord, UUID> {
         @Param("companyId") companyId: UUID,
         @Param("limit") limit: Int
     ): List<ExpenseRecord>
+
+    /**
+     * 회사별 지출 기록 조회 (기본)
+     */
+    fun findByCompanyId(companyId: UUID): List<ExpenseRecord>
 }

@@ -188,9 +188,9 @@ class TransactionController(
     fun deleteTransaction(
         @Parameter(description = "거래 ID") @PathVariable transactionId: UUID,
         @CurrentUser userPrincipal: UserPrincipal
-    ): ApiResponse<Void> {
+    ): ApiResponse<Unit> {
         // 삭제 로직은 서비스에서 구현 필요
-        return ApiResponse.success(null, "거래가 성공적으로 삭제되었습니다.")
+        return ApiResponse.success(Unit, "거래가 성공적으로 삭제되었습니다.")
     }
 
     @Operation(summary = "거래 상태 변경", description = "거래의 상태를 변경합니다.")

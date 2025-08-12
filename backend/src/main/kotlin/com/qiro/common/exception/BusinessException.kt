@@ -1,13 +1,14 @@
 package com.qiro.common.exception
 
 /**
- * 비즈니스 로직 예외 클래스
+ * 비즈니스 로직 예외
  */
 class BusinessException(
     val errorCode: ErrorCode,
-    override val message: String = errorCode.message,
-    override val cause: Throwable? = null
-) : RuntimeException(message, cause) {
+    message: String? = null,
+    cause: Throwable? = null
+) : RuntimeException(message ?: errorCode.message, cause) {
     
-    constructor(errorCode: ErrorCode, cause: Throwable) : this(errorCode, errorCode.message, cause)
+    constructor(errorCode: ErrorCode) : this(errorCode, null, null)
+    constructor(errorCode: ErrorCode, cause: Throwable) : this(errorCode, null, cause)
 }

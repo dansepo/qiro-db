@@ -1,0 +1,95 @@
+# 테스트 환경 설정
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+  
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+  
+  h2:
+    console:
+      enabled: true
+
+# 로깅 설정 (테스트 환경)
+logging:
+  level:
+    com.qiro: DEBUG
+    org.springframework.test: DEBUG
+    org.springframework.transaction: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+# QIRO 테스트 환경 설정
+qiro:
+  jwt:
+    secret: test-jwt-secret-key-for-testing-only
+    access-token-expiration: PT1H
+    refresh-token-expiration: P1D
+  
+  database:
+    connection-timeout: PT5S
+    max-pool-size: 5
+    min-pool-size: 1
+    idle-timeout: PT1M
+    max-lifetime: PT5M
+  
+  file:
+    upload-path: ./test-uploads
+    max-file-size: 1048576 # 1MB (테스트에서는 작게)
+    allowed-extensions:
+      - jpg
+      - png
+      - pdf
+    pdf-generation-path: ./test-pdf-temp
+  
+  notification:
+    email:
+      enabled: false
+    sms:
+      enabled: false
+    push:
+      enabled: false
+  
+  monitoring:
+    metrics:
+      enabled: false
+    health:
+      disk-space-threshold: 104857600 # 100MB
+      memory-threshold: 0.95
+      database-timeout: PT1S
+    logging:
+      level: DEBUG
+      max-file-size: 10MB
+      max-history: 1
+      total-size-cap: 50MB
+  
+  business:
+    invoice:
+      default-due-days: 7 # 테스트에서는 짧게
+      late-fee-rate: 0.01
+      late-fee-grace-period: 1
+      auto-send-enabled: false
+      pdf-generation-enabled: false
+    payment:
+      supported-methods:
+        - CASH
+        - BANK_TRANSFER
+      refund-grace-period: P1D
+      auto-confirmation-enabled: true # 테스트에서는 자동 확인
+    maintenance:
+      default-priority: LOW
+      auto-assignment-enabled: false
+      escalation-threshold: PT1H
+      reminder-interval: PT30M

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalDateTime
 import java.util.*
 
 @Service
@@ -353,8 +354,8 @@ class UnitService(
             specialFeatures = unit.specialFeatures,
             description = unit.description,
             internalNotes = unit.internalNotes,
-            createdAt = unit.createdAt,
-            updatedAt = unit.updatedAt
+            createdAt = unit.createdAt ?: LocalDateTime.now(),
+            updatedAt = unit.updatedAt ?: LocalDateTime.now()
         )
     }
 }

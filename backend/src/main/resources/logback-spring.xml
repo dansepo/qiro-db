@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <springProfile name="!prod">
+        <!-- 개발 환경용 콘솔 로그 -->
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="prod">
+        <!-- 운영 환경용 JSON 로그 -->
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/qiro-application.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/qiro-application.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <maxFileSize>100MB</maxFileSize>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+                <providers>
+                    <timestamp/>
+                    <logLevel/>
+                    <loggerName/>
+                    <message/>
+                    <mdc/>
+                    <stackTrace/>
+                    <pattern>
+                        <pattern>
+                            {
+                                "traceId": "%X{traceId:-}",
+                                "spanId": "%X{spanId:-}",
+                                "service": "qiro-backend",
+                                "environment": "production"
+                            }
+                        </pattern>
+                    </pattern>
+                </providers>
+            </encoder>
+        </appender>
+
+        <!-- 에러 로그 별도 파일 -->
+        <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/qiro-error.log</file>
+            <filter class="ch.qos.logback.classic.filter.LevelFilter">
+                <level>ERROR</level>
+                <onMatch>ACCEPT</onMatch>
+                <onMismatch>DENY</onMismatch>
+            </filter>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/qiro-error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <maxFileSize>50MB</maxFileSize>
+                <maxHistory>60</maxHistory>
+                <totalSizeCap>1GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+                <providers>
+                    <timestamp/>
+                    <logLevel/>
+                    <loggerName/>
+                    <message/>
+                    <mdc/>
+                    <stackTrace/>
+                    <pattern>
+                        <pattern>
+                            {
+                                "traceId": "%X{traceId:-}",
+                                "spanId": "%X{spanId:-}",
+                                "service": "qiro-backend",
+                                "environment": "production",
+                                "severity": "ERROR"
+                            }
+                        </pattern>
+                    </pattern>
+                </providers>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- 특정 패키지별 로그 레벨 설정 -->
+    <logger name="com.qiro" level="DEBUG"/>
+    <logger name="org.springframework.security" level="DEBUG"/>
+    <logger name="org.springframework.web" level="INFO"/>
+    <logger name="org.hibernate.SQL" level="DEBUG"/>
+    <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE"/>
+    
+    <!-- 외부 라이브러리 로그 레벨 조정 -->
+    <logger name="org.apache.http" level="WARN"/>
+    <logger name="org.springframework.boot.actuate" level="WARN"/>
+    <logger name="io.micrometer" level="WARN"/>
+</configuration>

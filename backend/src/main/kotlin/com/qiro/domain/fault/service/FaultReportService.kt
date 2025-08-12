@@ -4,6 +4,7 @@ import com.qiro.domain.fault.dto.*
 import com.qiro.domain.fault.entity.*
 import com.qiro.domain.fault.repository.FaultCategoryRepository
 import com.qiro.domain.fault.repository.FaultReportRepository
+import com.qiro.domain.fault.repository.FaultReportRepositoryImpl
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Service

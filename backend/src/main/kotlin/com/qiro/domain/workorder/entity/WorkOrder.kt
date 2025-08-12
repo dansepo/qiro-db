@@ -282,6 +282,58 @@ class WorkOrder : BaseEntity() {
     }
     
     /**
+     * 작업 일시정지
+     */
+    fun pause() {
+        if (workStatus.canTransitionTo(WorkStatus.PAUSED)) {
+            workStatus = WorkStatus.PAUSED
+        } else {
+            throw IllegalStateException("현재 상태에서 일시정지할 수 없습니다: $workStatus")
+        }
+    }
+    
+    /**
+     * 작업 재개
+     */
+    fun resume() {
+        if (workStatus.canTransitionTo(WorkStatus.IN_PROGRESS)) {
+            workStatus = WorkStatus.IN_PROGRESS
+        } else {
+            throw IllegalStateException("현재 상태에서 재개할 수 없습니다: $workStatus")
+        }
+    }
+    
+    /**
+     * 작업 취소
+     */
+    fun cancel() {
+        if (workStatus.canTransitionTo(WorkStatus.CANCELLED)) {
+            workStatus = WorkStatus.CANCELLED
+        } else {
+            throw IllegalStateException("현재 상태에서 취소할 수 없습니다: $workStatus")
+        }
+    }
+    
+    /**
+     * 작업 복사
+     */
+    fun copy(newTitle: String): WorkOrder {
+        return WorkOrder().apply {
+            this.company = this@WorkOrder.company
+            this.building = this@WorkOrder.building
+            this.unit = this@WorkOrder.unit
+            this.asset = this@WorkOrder.asset
+            this.workOrderTitle = newTitle
+            this.workDescription = this@WorkOrder.workDescription
+            this.workType = this@WorkOrder.workType
+            this.workPriority = this@WorkOrder.workPriority
+            this.estimatedDurationHours = this@WorkOrder.estimatedDurationHours
+            this.estimatedCost = this@WorkOrder.estimatedCost
+            this.workStatus = WorkStatus.DRAFT
+        }
+    }
+    
+    /**
      * 작업 거부 처리
      */
     fun reject(rejector: User, reason: String) {
@@ -313,6 +365,23 @@ class WorkOrder : BaseEntity() {
             val endDate = actualEndDate ?: now
             endDate.isAfter(scheduled)
         } ?: false
+    }
+    
+    /**
+     * 상태 전환 가능 여부 확인
+     */
+    fun canTransitionTo(newStatus: WorkStatus): Boolean {
+        return when (workStatus) {
+            WorkStatus.DRAFT -> newStatus in listOf(WorkStatus.PENDING, WorkStatus.CANCELLED)
+            WorkStatus.PENDING -> newStatus in listOf(WorkStatus.APPROVED, WorkStatus.REJECTED, WorkStatus.CANCELLED)
+            WorkStatus.APPROVED -> newStatus in listOf(WorkStatus.IN_PROGRESS, WorkStatus.CANCELLED)
+            WorkStatus.IN_PROGRESS -> newStatus in listOf(WorkStatus.PAUSED, WorkStatus.COMPLETED, WorkStatus.CANCELLED)
+            WorkStatus.PAUSED -> newStatus in listOf(WorkStatus.IN_PROGRESS, WorkStatus.CANCELLED)
+            WorkStatus.COMPLETED -> false // 완료된 작업은 상태 변경 불가
+            WorkStatus.CANCELLED -> false // 취소된 작업은 상태 변경 불가
+            WorkStatus.REJECTED -> newStatus in listOf(WorkStatus.DRAFT, WorkStatus.CANCELLED)
+            else -> false
+        }
     }
     
     override fun equals(other: Any?): Boolean {

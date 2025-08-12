@@ -34,7 +34,7 @@ class AccountBalanceService(
         val balance = calculateBalance(accountCode.accountType, debitAmount, creditAmount)
 
         return AccountBalanceDto(
-            accountId = accountCode.id,
+            accountId = 0L, // TODO: AccountCode의 UUID를 Long으로 변환 필요
             accountCode = accountCode.accountCode,
             accountName = accountCode.accountName,
             accountType = accountCode.accountType,
@@ -57,7 +57,7 @@ class AccountBalanceService(
             val balance = calculateBalance(accountCode.accountType, debitAmount, creditAmount)
 
             AccountBalanceDto(
-                accountId = accountCode.id,
+                accountId = 0L, // TODO: AccountCode의 UUID를 Long으로 변환 필요
                 accountCode = accountCode.accountCode,
                 accountName = accountCode.accountName,
                 accountType = accountCode.accountType,

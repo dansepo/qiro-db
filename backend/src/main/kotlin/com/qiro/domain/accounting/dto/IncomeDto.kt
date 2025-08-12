@@ -119,3 +119,100 @@ data class IncomeDashboardResponse(
     val recentIncomes: List<IncomeRecordResponse>,
     val overdueList: List<ReceivableResponse>
 )
+
+// 연체료 정책 생성 요청
+data class CreateLateFeePolicyRequest(
+    val incomeTypeId: UUID,
+    val calculationType: String, // PERCENTAGE, FIXED_AMOUNT, DAILY_RATE
+    val feeRate: BigDecimal,
+    val minimumFee: BigDecimal? = null,
+    val maximumFee: BigDecimal? = null,
+    val gracePeriodDays: Int = 0,
+    val description: String? = null
+)
+
+// 연체료 정책 응답
+data class LateFeePolicyDto(
+    val id: UUID,
+    val incomeTypeId: UUID,
+    val incomeTypeName: String,
+    val calculationType: String,
+    val feeRate: BigDecimal,
+    val minimumFee: BigDecimal?,
+    val maximumFee: BigDecimal?,
+    val gracePeriodDays: Int,
+    val description: String?,
+    val isActive: Boolean,
+    val createdAt: String
+)
+
+// 정기 수입 스케줄 생성 요청
+data class CreateRecurringIncomeScheduleRequest(
+    val incomeTypeId: UUID,
+    val amount: BigDecimal,
+    val frequency: String, // MONTHLY, QUARTERLY, YEARLY
+    val startDate: LocalDate,
+    val endDate: LocalDate? = null,
+    val dayOfMonth: Int? = null, // 매월 몇 일에 생성할지
+    val description: String? = null,
+    val autoApprove: Boolean = false
+)
+
+// 정기 수입 스케줄 응답
+data class RecurringIncomeScheduleDto(
+    val id: UUID,
+    val incomeTypeId: UUID,
+    val incomeTypeName: String,
+    val amount: BigDecimal,
+    val frequency: String,
+    val startDate: LocalDate,
+    val endDate: LocalDate?,
+    val dayOfMonth: Int?,
+    val description: String?,
+    val autoApprove: Boolean,
+    val isActive: Boolean,
+    val lastGeneratedDate: LocalDate?,
+    val nextGenerationDate: LocalDate?,
+    val createdAt: String
+)
+
+// 미수금 요약 응답
+data class ReceivableSummaryDto(
+    val totalReceivables: BigDecimal,
+    val totalOverdue: BigDecimal,
+    val overdueCount: Int,
+    val averageOverdueDays: Double,
+    val collectionRate: BigDecimal
+)
+
+// 수입 기록 DTO (페이징용)
+data class IncomeRecordDto(
+    val id: UUID,
+    val incomeTypeId: UUID,
+    val incomeTypeName: String,
+    val amount: BigDecimal,
+    val incomeDate: LocalDate,
+    val status: String,
+    val description: String?,
+    val unitId: String?,
+    val period: String?,
+    val createdAt: String,
+    val updatedAt: String
+)
+
+// 미수금 DTO (페이징용)
+data class ReceivableDto(
+    val id: UUID,
+    val incomeRecordId: UUID,
+    val unitId: String?,
+    val originalAmount: BigDecimal,
+    val remainingAmount: BigDecimal,
+    val dueDate: LocalDate,
+    val overdueDays: Int,
+    val lateFee: BigDecimal,
+    val status: String,
+    val incomeTypeName: String,
+    val period: String?,
+    val createdAt: String,
+    val updatedAt: String
+)

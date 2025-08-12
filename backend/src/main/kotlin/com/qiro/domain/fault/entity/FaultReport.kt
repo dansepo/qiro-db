@@ -16,9 +16,6 @@ import java.util.*
 @Entity
 @Table(name = "fault_reports", schema = "bms")
 data class FaultReport(
-    @Id
-    @Column(name = "report_id")
-    val id: UUID = UUID.randomUUID(),
 
     /**
      * 회사 ID (멀티테넌시)

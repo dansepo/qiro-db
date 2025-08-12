@@ -67,19 +67,3 @@ class Account(
         return "Account(accountId=$accountId, accountCode='$accountCode', accountName='$accountName', accountType=$accountType)"
     }
 }
-
-/**
- * 계정 유형 열거형
- */
-enum class AccountType {
-    /** 자산 */
-    ASSET,
-    /** 부채 */
-    LIABILITY,
-    /** 자본 */
-    EQUITY,
-    /** 수익 */
-    REVENUE,
-    /** 비용 */
-    EXPENSE
-}

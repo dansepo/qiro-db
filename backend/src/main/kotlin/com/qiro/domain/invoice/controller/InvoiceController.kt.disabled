@@ -1,0 +1,256 @@
+package com.qiro.domain.invoice.controller
+
+import com.qiro.common.dto.ApiResponse
+import com.qiro.common.security.TenantContext
+import com.qiro.domain.invoice.dto.*
+import com.qiro.domain.invoice.service.InvoiceService
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.Parameter
+import io.swagger.v3.oas.annotations.tags.Tag
+import org.springframework.data.domain.Page
+import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.*
+import java.util.*
+
+/**
+ * 고지서 관리 컨트롤러
+ */
+@Tag(name = "Invoice", description = "고지서 관리 API")
+@RestController
+@RequestMapping("/api/v1/invoices")
+class InvoiceController(
+    private val invoiceService: InvoiceService
+) {
+
+    @Operation(summary = "고지서 생성", description = "새로운 고지서를 생성합니다.")
+    @PostMapping
+    fun createInvoice(
+        @RequestBody request: CreateInvoiceRequest
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.createInvoice(companyId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "고지서가 생성되었습니다.")
+        )
+    }
+
+    @Operation(summary = "고지서 조회", description = "고지서 상세 정보를 조회합니다.")
+    @GetMapping("/{invoiceId}")
+    fun getInvoice(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.getInvoice(companyId, invoiceId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice)
+        )
+    }
+
+    @Operation(summary = "고지서 목록 조회", description = "고지서 목록을 조회합니다.")
+    @GetMapping
+    fun getInvoices(
+        @Parameter(description = "세대 ID") @RequestParam(required = false) unitId: UUID?,
+        @Parameter(description = "고지서 상태") @RequestParam(required = false) status: String?,
+        @Parameter(description = "시작일") @RequestParam(required = false) startDate: String?,
+        @Parameter(description = "종료일") @RequestParam(required = false) endDate: String?,
+        @Parameter(description = "연체만 조회") @RequestParam(required = false, defaultValue = "false") overdueOnly: Boolean,
+        @Parameter(description = "페이지 번호") @RequestParam(defaultValue = "0") page: Int,
+        @Parameter(description = "페이지 크기") @RequestParam(defaultValue = "20") size: Int
+    ): ResponseEntity<ApiResponse<Page<InvoiceResponse>>> {
+        val companyId = TenantContext.getCurrentTenant()
+        
+        val request = InvoiceSearchRequest(
+            unitId = unitId,
+            status = status?.let { com.qiro.domain.invoice.entity.InvoiceStatus.valueOf(it) },
+            startDate = startDate?.let { java.time.LocalDate.parse(it) },
+            endDate = endDate?.let { java.time.LocalDate.parse(it) },
+            overdueOnly = overdueOnly,
+            page = page,
+            size = size
+        )
+        
+        val invoices = invoiceService.getInvoices(companyId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoices)
+        )
+    }
+
+    @Operation(summary = "고지서 번호로 조회", description = "고지서 번호로 고지서를 조회합니다.")
+    @GetMapping("/number/{invoiceNumber}")
+    fun getInvoiceByNumber(
+        @Parameter(description = "고지서 번호") @PathVariable invoiceNumber: String
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.getInvoiceByNumber(companyId, invoiceNumber)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice)
+        )
+    }
+
+    @Operation(summary = "고지서 발송", description = "고지서를 발송 처리합니다.")
+    @PostMapping("/{invoiceId}/send")
+    fun sendInvoice(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.sendInvoice(companyId, invoiceId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "고지서가 발송되었습니다.")
+        )
+    }
+
+    @Operation(summary = "고지서 결제 처리", description = "고지서 결제를 처리합니다.")
+    @PostMapping("/{invoiceId}/payment")
+    fun processPayment(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID,
+        @RequestBody request: ProcessPaymentRequest
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.processPayment(companyId, invoiceId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "결제가 처리되었습니다.")
+        )
+    }
+
+    @Operation(summary = "연체료 적용", description = "고지서에 연체료를 적용합니다.")
+    @PostMapping("/{invoiceId}/late-fee")
+    fun applyLateFee(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID,
+        @RequestBody request: ApplyLateFeeRequest
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.applyLateFee(companyId, invoiceId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "연체료가 적용되었습니다.")
+        )
+    }
+
+    @Operation(summary = "할인 적용", description = "고지서에 할인을 적용합니다.")
+    @PostMapping("/{invoiceId}/discount")
+    fun applyDiscount(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID,
+        @RequestBody request: ApplyDiscountRequest
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.applyDiscount(companyId, invoiceId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "할인이 적용되었습니다.")
+        )
+    }
+
+    @Operation(summary = "고지서 취소", description = "고지서를 취소합니다.")
+    @PostMapping("/{invoiceId}/cancel")
+    fun cancelInvoice(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID,
+        @RequestBody request: CancelInvoiceRequest
+    ): ResponseEntity<ApiResponse<InvoiceResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoice = invoiceService.cancelInvoice(companyId, invoiceId, request)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoice, "고지서가 취소되었습니다.")
+        )
+    }
+
+    @Operation(summary = "PDF 고지서 생성", description = "PDF 형태의 고지서를 생성합니다.")
+    @PostMapping("/{invoiceId}/pdf")
+    fun generatePdf(
+        @Parameter(description = "고지서 ID") @PathVariable invoiceId: UUID
+    ): ResponseEntity<ApiResponse<String>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val pdfPath = invoiceService.generatePdf(companyId, invoiceId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(pdfPath, "PDF 고지서가 생성되었습니다.")
+        )
+    }
+
+    @Operation(summary = "고지서 통계", description = "고지서 통계 정보를 조회합니다.")
+    @GetMapping("/statistics")
+    fun getInvoiceStatistics(): ResponseEntity<ApiResponse<InvoiceStatisticsResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val statistics = invoiceService.getInvoiceStatistics(companyId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(statistics)
+        )
+    }
+
+    @Operation(summary = "연체 통계", description = "연체 통계 정보를 조회합니다.")
+    @GetMapping("/statistics/overdue")
+    fun getOverdueStatistics(): ResponseEntity<ApiResponse<OverdueStatisticsResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val statistics = invoiceService.getOverdueStatistics(companyId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(statistics)
+        )
+    }
+
+    @Operation(summary = "월별 통계", description = "월별 고지서 통계를 조회합니다.")
+    @GetMapping("/statistics/monthly")
+    fun getMonthlyStatistics(
+        @Parameter(description = "연도") @RequestParam(defaultValue = "2024") year: Int
+    ): ResponseEntity<ApiResponse<List<MonthlyInvoiceStatsResponse>>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val statistics = invoiceService.getMonthlyStatistics(companyId, year)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(statistics)
+        )
+    }
+
+    @Operation(summary = "세대별 미납 현황", description = "세대별 미납 현황을 조회합니다.")
+    @GetMapping("/statistics/unpaid-units")
+    fun getUnitUnpaidStats(): ResponseEntity<ApiResponse<List<UnitUnpaidStatsResponse>>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val statistics = invoiceService.getUnitUnpaidStats(companyId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(statistics)
+        )
+    }
+
+    @Operation(summary = "대시보드 데이터", description = "고지서 대시보드 데이터를 조회합니다.")
+    @GetMapping("/dashboard")
+    fun getDashboardData(): ResponseEntity<ApiResponse<InvoiceDashboardResponse>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val dashboardData = invoiceService.getDashboardData(companyId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(dashboardData)
+        )
+    }
+
+    @Operation(summary = "일괄 고지서 생성", description = "월별 관리비 기준으로 일괄 고지서를 생성합니다.")
+    @PostMapping("/bulk")
+    fun createBulkInvoices(
+        @Parameter(description = "청구 ID") @RequestParam billingId: UUID
+    ): ResponseEntity<ApiResponse<List<InvoiceResponse>>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val invoices = invoiceService.createBulkInvoices(companyId, billingId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(invoices, "${invoices.size}건의 고지서가 생성되었습니다.")
+        )
+    }
+
+    @Operation(summary = "일괄 연체료 적용", description = "연체된 고지서에 일괄로 연체료를 적용합니다.")
+    @PostMapping("/bulk/late-fees")
+    fun applyBulkLateFees(): ResponseEntity<ApiResponse<Int>> {
+        val companyId = TenantContext.getCurrentTenant()
+        val appliedCount = invoiceService.applyBulkLateFees(companyId)
+        
+        return ResponseEntity.ok(
+            ApiResponse.success(appliedCount, "${appliedCount}건의 고지서에 연체료가 적용되었습니다.")
+        )
+    }
+}

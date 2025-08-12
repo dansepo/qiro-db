@@ -110,8 +110,8 @@ data class WorkOrderLaborTrackingDto(
                 isApproved = entity.isApproved(),
                 averagePerformanceScore = entity.getAveragePerformanceScore(),
                 costEfficiency = entity.getCostEfficiency(),
-                createdAt = entity.createdAt,
-                updatedAt = entity.updatedAt,
+                createdAt = entity.createdAt ?: LocalDateTime.now(),
+                updatedAt = entity.updatedAt ?: LocalDateTime.now(),
                 createdBy = entity.createdBy,
                 updatedBy = entity.updatedBy
             )
@@ -211,21 +211,4 @@ data class LaborTrackingStatistics(
     val trackingsBySkillLevel: Map<WorkOrderLaborTracking.SkillLevel, Long>
 )
 
-/**
- * 작업자별 성과 요약 DTO
- */
-data class WorkerPerformanceSummary(
-    val workerId: UUID,
-    val workerName: String? = null,
-    val totalWorkHours: BigDecimal,
-    val totalLaborCost: BigDecimal,
-    val averageHourlyRate: BigDecimal,
-    val averageProductivityScore: BigDecimal,
-    val averageQualityScore: BigDecimal,
-    val averageSafetyScore: BigDecimal,
-    val overtimeHours: BigDecimal,
-    val overtimePercentage: BigDecimal,
-    val completedTasks: Long,
-    val approvalRate: BigDecimal,
-    val costEfficiency: BigDecimal
-)
+// WorkerPerformanceSummary는 WorkOrderAssignmentDto에 정의되어 있음

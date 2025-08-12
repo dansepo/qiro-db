@@ -2,6 +2,8 @@ package com.qiro.domain.workorder.controller
 
 import com.qiro.common.response.ApiResponse
 import com.qiro.domain.workorder.dto.*
+import com.qiro.domain.workorder.entity.WorkOrder
+import com.qiro.domain.workorder.entity.WorkStatus
 import com.qiro.domain.workorder.service.WorkOrderService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter

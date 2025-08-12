@@ -1,0 +1,97 @@
+package com.qiro.domain.invoice.service
+
+import com.qiro.domain.invoice.dto.*
+import com.qiro.domain.invoice.entity.Invoice
+import org.springframework.data.domain.Page
+import java.util.*
+
+/**
+ * 고지서 서비스 인터페이스
+ */
+interface InvoiceService {
+
+    /**
+     * 고지서 생성
+     */
+    fun createInvoice(companyId: UUID, request: CreateInvoiceRequest): InvoiceResponse
+
+    /**
+     * 고지서 조회
+     */
+    fun getInvoice(companyId: UUID, invoiceId: UUID): InvoiceResponse
+
+    /**
+     * 고지서 목록 조회
+     */
+    fun getInvoices(companyId: UUID, request: InvoiceSearchRequest): Page<InvoiceResponse>
+
+    /**
+     * 고지서 번호로 조회
+     */
+    fun getInvoiceByNumber(companyId: UUID, invoiceNumber: String): InvoiceResponse
+
+    /**
+     * 고지서 발송 처리
+     */
+    fun sendInvoice(companyId: UUID, invoiceId: UUID): InvoiceResponse
+
+    /**
+     * 고지서 결제 처리
+     */
+    fun processPayment(companyId: UUID, invoiceId: UUID, request: ProcessPaymentRequest): InvoiceResponse
+
+    /**
+     * 연체료 적용
+     */
+    fun applyLateFee(companyId: UUID, invoiceId: UUID, request: ApplyLateFeeRequest): InvoiceResponse
+
+    /**
+     * 할인 적용
+     */
+    fun applyDiscount(companyId: UUID, invoiceId: UUID, request: ApplyDiscountRequest): InvoiceResponse
+
+    /**
+     * 고지서 취소
+     */
+    fun cancelInvoice(companyId: UUID, invoiceId: UUID, request: CancelInvoiceRequest): InvoiceResponse
+
+    /**
+     * PDF 고지서 생성
+     */
+    fun generatePdf(companyId: UUID, invoiceId: UUID): String
+
+    /**
+     * 고지서 통계 조회
+     */
+    fun getInvoiceStatistics(companyId: UUID): InvoiceStatisticsResponse
+
+    /**
+     * 연체 통계 조회
+     */
+    fun getOverdueStatistics(companyId: UUID): OverdueStatisticsResponse
+
+    /**
+     * 월별 고지서 통계 조회
+     */
+    fun getMonthlyStatistics(companyId: UUID, year: Int): List<MonthlyInvoiceStatsResponse>
+
+    /**
+     * 세대별 미납 현황 조회
+     */
+    fun getUnitUnpaidStats(companyId: UUID): List<UnitUnpaidStatsResponse>
+
+    /**
+     * 고지서 대시보드 데이터 조회
+     */
+    fun getDashboardData(companyId: UUID): InvoiceDashboardResponse
+
+    /**
+     * 일괄 고지서 생성 (월별 관리비 기준)
+     */
+    fun createBulkInvoices(companyId: UUID, billingId: UUID): List<InvoiceResponse>
+
+    /**
+     * 연체 고지서 일괄 연체료 적용
+     */
+    fun applyBulkLateFees(companyId: UUID): Int
+}

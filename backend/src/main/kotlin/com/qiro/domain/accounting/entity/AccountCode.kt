@@ -29,11 +29,6 @@ import java.util.*
     ]
 )
 class AccountCode(
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "account_id")
-    val id: Long = 0L,
-
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id", nullable = false)
     val company: Company,
@@ -62,15 +57,7 @@ class AccountCode(
     var isSystemAccount: Boolean = false,
 
     @Column(name = "description", columnDefinition = "TEXT")
-    var description: String? = null,
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "created_by")
-    val createdBy: User? = null,
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "updated_by")
-    var updatedBy: User? = null
+    var description: String? = null
 ) : BaseEntity() {
 
     @OneToMany(mappedBy = "parentAccount", cascade = [CascadeType.ALL], fetch = FetchType.LAZY)

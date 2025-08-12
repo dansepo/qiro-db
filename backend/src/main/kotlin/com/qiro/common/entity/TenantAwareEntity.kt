@@ -11,7 +11,7 @@ abstract class TenantAwareEntity : BaseEntity() {
     open lateinit var companyId: UUID
         protected set
     
-    protected fun setCompanyId(companyId: UUID) {
+    fun setCompanyId(companyId: UUID) {
         this.companyId = companyId
     }
 }

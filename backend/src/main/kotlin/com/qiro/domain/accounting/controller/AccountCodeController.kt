@@ -1,6 +1,6 @@
 package com.qiro.domain.accounting.controller
 
-import com.qiro.common.response.ApiResponse
+import com.qiro.common.dto.ApiResponse
 import com.qiro.common.security.CurrentUser
 import com.qiro.domain.accounting.dto.*
 import com.qiro.domain.accounting.entity.AccountType
@@ -142,8 +142,8 @@ class AccountCodeController(
     fun createDefaultAccountCodes(
         @Parameter(description = "회사 ID") @PathVariable companyId: UUID,
         @CurrentUser userPrincipal: CustomUserPrincipal
-    ): ApiResponse<Unit> {
+    ): ApiResponse<String> {
         accountCodeService.createDefaultAccountCodes(companyId, userPrincipal.userId)
-        return ApiResponse.success(Unit, "기본 계정과목이 성공적으로 생성되었습니다.")
+        return ApiResponse.success("기본 계정과목이 성공적으로 생성되었습니다.")
     }
 }

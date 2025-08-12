@@ -14,6 +14,11 @@ import java.util.*
 @EntityListeners(AuditingEntityListener::class)
 abstract class BaseEntity {
     
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "id", nullable = false)
+    open val id: UUID = UUID.randomUUID()
+    
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     var createdAt: LocalDateTime? = null

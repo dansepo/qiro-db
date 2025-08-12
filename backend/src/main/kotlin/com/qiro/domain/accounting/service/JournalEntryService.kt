@@ -33,7 +33,7 @@ class JournalEntryService(
      */
     @Transactional
     fun createJournalEntry(request: CreateJournalEntryRequest): JournalEntryResponse {
-        val companyId = TenantContext.getCurrentTenantId()
+        val companyId = TenantContext.getCurrentCompanyId()
         
         // 회계 기간 확인
         val financialPeriod = financialPeriodRepository.findByCompanyIdAndDate(companyId, request.entryDate)
@@ -99,6 +99,35 @@ class JournalEntryService(
             throw BusinessException(ErrorCode.BUSINESS_ERROR, "분개 전표 검증 실패: ${validationResult.errors.joinToString(", ")}")
         }
 
+        return convertToResponse(savedJournalEntry)
+    }
+
+    /**
+     * 분개 전표 수정
+     */
+    @Transactional
+    fun updateJournalEntry(entryId: UUID, request: UpdateJournalEntryRequest): JournalEntryResponse {
+        val companyId = TenantContext.getCurrentCompanyId()
+        
+        val journalEntry = journalEntryRepository.findById(entryId).orElseThrow {
+            BusinessException(ErrorCode.ENTITY_NOT_FOUND, "분개 전표를 찾을 수 없습니다: $entryId")
+        }
+
+        // 회사 소속 확인
+        if (journalEntry.companyId != companyId) {
+            throw BusinessException(ErrorCode.ACCESS_DENIED, "다른 회사의 분개 전표입니다")
+        }
+
+        // 승인된 전표는 수정 불가
+        if (journalEntry.status != JournalEntryStatus.DRAFT) {
+            throw BusinessException(ErrorCode.BUSINESS_ERROR, "승인된 분개 전표는 수정할 수 없습니다")
+        }
+
+        // 기본 정보 수정
+        journalEntry.description = request.description
+        journalEntry.entryDate = request.entryDate
+        
+        val savedJournalEntry = journalEntryRepository.save(journalEntry)
         return convertToResponse(savedJournalEntry)
     }
 

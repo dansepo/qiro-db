@@ -1,6 +1,7 @@
 package com.qiro.domain.accounting.repository
 
 import com.qiro.domain.accounting.entity.Receivable
+import com.qiro.domain.accounting.entity.ReceivableStatus
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
@@ -25,7 +26,7 @@ interface ReceivableRepository : JpaRepository<Receivable, UUID> {
     /**
      * 상태별 미수금 조회
      */
-    fun findByCompanyIdAndStatus(companyId: UUID, status: Receivable.Status): List<Receivable>
+    fun findByCompanyIdAndStatus(companyId: UUID, status: ReceivableStatus): List<Receivable>
 
     /**
      * 연체된 미수금 조회

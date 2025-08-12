@@ -1,0 +1,300 @@
+package com.qiro.domain.invoice.service
+
+import com.qiro.domain.billing.repository.MonthlyBillingRepository
+import com.qiro.domain.invoice.dto.*
+import com.qiro.domain.invoice.entity.Invoice
+import com.qiro.domain.invoice.entity.InvoiceStatus
+import com.qiro.domain.invoice.repository.InvoiceRepository
+import com.qiro.domain.unit.repository.UnitRepository
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.math.BigDecimal
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.*
+
+/**
+ * 고지서 서비스 구현체
+ */
+@Service
+@Transactional
+class InvoiceServiceImpl(
+    private val invoiceRepository: InvoiceRepository,
+    private val unitRepository: UnitRepository,
+    private val billingRepository: MonthlyBillingRepository
+) : InvoiceService {
+
+    override fun createInvoice(companyId: UUID, request: CreateInvoiceRequest): InvoiceResponse {
+        val unit = unitRepository.findByIdOrNull(request.unitId)
+            ?: throw IllegalArgumentException("세대를 찾을 수 없습니다.")
+        
+        require(unit.companyId == companyId) { "접근 권한이 없습니다." }
+
+        val billing = billingRepository.findByIdOrNull(request.billingId)
+            ?: throw IllegalArgumentException("청구 정보를 찾을 수 없습니다.")
+
+        require(billing.companyId == companyId) { "접근 권한이 없습니다." }
+
+        val invoiceNumber = generateInvoiceNumber(companyId, billing.billingMonth)
+
+        val invoice = Invoice(
+            companyId = companyId,
+            unit = unit,
+            billing = billing,
+            invoiceNumber = invoiceNumber,
+            issueDate = LocalDate.now(),
+            dueDate = request.dueDate,
+            totalAmount = billing.totalAmount,
+            notes = request.notes
+        )
+
+        val savedInvoice = invoiceRepository.save(invoice)
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    @Transactional(readOnly = true)
+    override fun getInvoice(companyId: UUID, invoiceId: UUID): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        return toInvoiceResponse(invoice)
+    }
+
+    @Transactional(readOnly = true)
+    override fun getInvoices(companyId: UUID, request: InvoiceSearchRequest): Page<InvoiceResponse> {
+        val pageable = PageRequest.of(
+            request.page,
+            request.size,
+            Sort.by(Sort.Direction.DESC, "issueDate")
+        )
+
+        val invoices = when {
+            request.overdueOnly -> {
+                invoiceRepository.findOverdueInvoices(companyId, LocalDate.now(), pageable)
+            }
+            request.unitId != null && request.status != null -> {
+                invoiceRepository.findByCompanyIdAndUnitIdOrderByIssueDateDesc(companyId, request.unitId, pageable)
+                    .filter { it.status == request.status }
+            }
+            request.unitId != null -> {
+                invoiceRepository.findByCompanyIdAndUnitIdOrderByIssueDateDesc(companyId, request.unitId, pageable)
+            }
+            request.status != null -> {
+                invoiceRepository.findByCompanyIdAndStatusOrderByIssueDateDesc(companyId, request.status, pageable)
+            }
+            request.startDate != null && request.endDate != null -> {
+                invoiceRepository.findByCompanyIdAndIssueDateBetween(
+                    companyId, request.startDate, request.endDate, pageable
+                )
+            }
+            else -> {
+                invoiceRepository.findByCompanyIdOrderByIssueDateDesc(companyId, pageable)
+            }
+        }
+
+        return invoices.map { toInvoiceResponse(it) }
+    }
+
+    @Transactional(readOnly = true)
+    override fun getInvoiceByNumber(companyId: UUID, invoiceNumber: String): InvoiceResponse {
+        val invoice = invoiceRepository.findByCompanyIdAndInvoiceNumber(companyId, invoiceNumber)
+            ?: throw IllegalArgumentException("고지서를 찾을 수 없습니다.")
+        
+        return toInvoiceResponse(invoice)
+    }
+
+    override fun sendInvoice(companyId: UUID, invoiceId: UUID): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        invoice.markAsSent()
+        val savedInvoice = invoiceRepository.save(invoice)
+        
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    override fun processPayment(companyId: UUID, invoiceId: UUID, request: ProcessPaymentRequest): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        invoice.processPayment(request.amount)
+        val savedInvoice = invoiceRepository.save(invoice)
+        
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    override fun applyLateFee(companyId: UUID, invoiceId: UUID, request: ApplyLateFeeRequest): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        invoice.applyLateFee(request.lateFee)
+        val savedInvoice = invoiceRepository.save(invoice)
+        
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    override fun applyDiscount(companyId: UUID, invoiceId: UUID, request: ApplyDiscountRequest): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        invoice.applyDiscount(request.discountAmount)
+        val savedInvoice = invoiceRepository.save(invoice)
+        
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    override fun cancelInvoice(companyId: UUID, invoiceId: UUID, request: CancelInvoiceRequest): InvoiceResponse {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        invoice.cancel(request.reason)
+        val savedInvoice = invoiceRepository.save(invoice)
+        
+        return toInvoiceResponse(savedInvoice)
+    }
+
+    override fun generatePdf(companyId: UUID, invoiceId: UUID): String {
+        val invoice = findInvoiceByCompanyAndId(companyId, invoiceId)
+        
+        // PDF 생성 로직 (실제 구현 시 PDF 라이브러리 사용)
+        val pdfPath = "/invoices/${invoice.invoiceNumber}.pdf"
+        invoice.pdfFilePath = pdfPath
+        invoiceRepository.save(invoice)
+        
+        return pdfPath
+    }
+
+    @Transactional(readOnly = true)
+    override fun getInvoiceStatistics(companyId: UUID): InvoiceStatisticsResponse {
+        val stats = invoiceRepository.getInvoiceStatistics(companyId)
+        return InvoiceStatisticsResponse.from(stats)
+    }
+
+    @Transactional(readOnly = true)
+    override fun getOverdueStatistics(companyId: UUID): OverdueStatisticsResponse {
+        val stats = invoiceRepository.getOverdueStatistics(companyId)
+        return OverdueStatisticsResponse.from(stats)
+    }
+
+    @Transactional(readOnly = true)
+    override fun getMonthlyStatistics(companyId: UUID, year: Int): List<MonthlyInvoiceStatsResponse> {
+        val startDate = LocalDate.of(year, 1, 1)
+        val endDate = LocalDate.of(year, 12, 31)
+        
+        val stats = invoiceRepository.getMonthlyInvoiceStats(companyId, startDate, endDate)
+        return stats.map { MonthlyInvoiceStatsResponse.from(it) }
+    }
+
+    @Transactional(readOnly = true)
+    override fun getUnitUnpaidStats(companyId: UUID): List<UnitUnpaidStatsResponse> {
+        val stats = invoiceRepository.getUnitUnpaidStats(companyId)
+        return stats.map { UnitUnpaidStatsResponse.from(it) }
+    }
+
+    @Transactional(readOnly = true)
+    override fun getDashboardData(companyId: UUID): InvoiceDashboardResponse {
+        val totalStats = getInvoiceStatistics(companyId)
+        val overdueStats = getOverdueStatistics(companyId)
+        val monthlyStats = getMonthlyStatistics(companyId, LocalDate.now().year)
+        val topUnpaidUnits = getUnitUnpaidStats(companyId).take(10)
+        
+        return InvoiceDashboardResponse(
+            totalStatistics = totalStats,
+            overdueStatistics = overdueStats,
+            monthlyStats = monthlyStats,
+            topUnpaidUnits = topUnpaidUnits
+        )
+    }
+
+    override fun createBulkInvoices(companyId: UUID, billingId: UUID): List<InvoiceResponse> {
+        val billing = billingRepository.findByIdOrNull(billingId)
+            ?: throw IllegalArgumentException("청구 정보를 찾을 수 없습니다.")
+
+        require(billing.companyId == companyId) { "접근 권한이 없습니다." }
+
+        // 해당 청구월의 모든 세대에 대해 고지서 생성
+        val units = unitRepository.findByCompanyId(companyId)
+        val dueDate = LocalDate.now().plusDays(30) // 30일 후 납기일
+
+        val invoices = units.map { unit ->
+            val invoiceNumber = generateInvoiceNumber(companyId, billing.billingMonth)
+            
+            Invoice(
+                companyId = companyId,
+                unit = unit,
+                billing = billing,
+                invoiceNumber = invoiceNumber,
+                issueDate = LocalDate.now(),
+                dueDate = dueDate,
+                totalAmount = billing.totalAmount
+            )
+        }
+
+        val savedInvoices = invoiceRepository.saveAll(invoices)
+        return savedInvoices.map { toInvoiceResponse(it) }
+    }
+
+    override fun applyBulkLateFees(companyId: UUID): Int {
+        val overdueInvoices = invoiceRepository.findOverdueInvoices(
+            companyId, 
+            LocalDate.now(), 
+            PageRequest.of(0, 1000)
+        ).content
+
+        var appliedCount = 0
+        
+        overdueInvoices.forEach { invoice ->
+            if (invoice.lateFee == BigDecimal.ZERO) {
+                // 연체료 계산 로직 (예: 연체일수 * 1000원)
+                val lateFee = BigDecimal(invoice.overdueDays * 1000)
+                invoice.applyLateFee(lateFee)
+                appliedCount++
+            }
+        }
+
+        invoiceRepository.saveAll(overdueInvoices)
+        return appliedCount
+    }
+
+    private fun findInvoiceByCompanyAndId(companyId: UUID, invoiceId: UUID): Invoice {
+        val invoice = invoiceRepository.findByIdOrNull(invoiceId)
+            ?: throw IllegalArgumentException("고지서를 찾을 수 없습니다.")
+        
+        require(invoice.companyId == companyId) { "접근 권한이 없습니다." }
+        
+        return invoice
+    }
+
+    private fun generateInvoiceNumber(companyId: UUID, billingMonth: String): String {
+        val formatter = DateTimeFormatter.ofPattern("yyyyMMdd")
+        val today = LocalDate.now().format(formatter)
+        val random = (1000..9999).random()
+        
+        return "INV-$today-$random"
+    }
+
+    private fun toInvoiceResponse(invoice: Invoice): InvoiceResponse {
+        return InvoiceResponse(
+            id = invoice.id,
+            invoiceNumber = invoice.invoiceNumber,
+            unitNumber = invoice.unit.unitNumber,
+            unitId = invoice.unit.id,
+            billingId = invoice.billing.id,
+            billingMonth = invoice.billing.billingMonth,
+            issueDate = invoice.issueDate,
+            dueDate = invoice.dueDate,
+            status = invoice.status,
+            statusDisplayName = invoice.status.displayName,
+            totalAmount = invoice.totalAmount,
+            paidAmount = invoice.paidAmount,
+            lateFee = invoice.lateFee,
+            discountAmount = invoice.discountAmount,
+            outstandingAmount = invoice.outstandingAmount,
+            isFullyPaid = invoice.isFullyPaid,
+            isOverdue = invoice.isOverdue,
+            overdueDays = invoice.overdueDays,
+            pdfFilePath = invoice.pdfFilePath,
+            sentDate = invoice.sentDate,
+            notes = invoice.notes,
+            createdAt = invoice.createdAt,
+            updatedAt = invoice.updatedAt
+        )
+    }
+}

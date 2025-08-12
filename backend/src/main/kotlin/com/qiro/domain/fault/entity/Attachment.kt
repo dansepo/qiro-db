@@ -11,9 +11,6 @@ import java.util.*
 @Entity
 @Table(name = "attachments", schema = "bms")
 data class Attachment(
-    @Id
-    @Column(name = "attachment_id")
-    val id: UUID = UUID.randomUUID(),
 
     /**
      * 연결된 엔티티 ID (고장 신고 ID 등)

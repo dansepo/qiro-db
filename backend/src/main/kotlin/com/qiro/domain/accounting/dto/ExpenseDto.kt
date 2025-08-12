@@ -65,8 +65,8 @@ data class ExpenseRecordDto(
     val referenceNumber: String?,
     val invoiceNumber: String?,
     val description: String?,
-    val status: ExpenseRecord.Status,
-    val approvalStatus: ExpenseRecord.ApprovalStatus,
+    val status: ExpenseStatus,
+    val approvalStatus: ApprovalStatus,
     val approvedBy: UUID?,
     val approvedAt: LocalDateTime?,
     val paidAt: LocalDateTime?,
@@ -95,9 +95,9 @@ data class ExpenseRecordDto(
                 invoiceNumber = entity.invoiceNumber,
                 description = entity.description,
                 status = entity.status,
-                approvalStatus = entity.approvalStatus,
+                approvalStatus = entity.approvalStatus ?: ApprovalStatus.PENDING,
                 approvedBy = entity.approvedBy,
-                approvedAt = entity.approvedAt,
+                approvedAt = entity.approvedAt?.atStartOfDay(),
                 paidAt = entity.paidAt,
                 journalEntryId = entity.journalEntryId,
                 createdBy = entity.createdBy,
@@ -314,4 +314,160 @@ data class VendorExpenseDto(
     val vendorName: String,
     val transactionCount: Long,
     val totalAmount: BigDecimal
+)
+
+// 컨트롤러에서 사용하는 응답 DTO들
+
+/**
+ * 지출 기록 응답 DTO
+ */
+data class ExpenseRecordResponse(
+    val id: UUID,
+    val expenseTypeName: String,
+    val vendorName: String?,
+    val amount: BigDecimal,
+    val expenseDate: LocalDate,
+    val status: String,
+    val description: String?,
+    val invoiceNumber: String?,
+    val isRecurring: Boolean,
+    val approvalStatus: String?,
+    val createdAt: String
+)
+
+/**
+ * 지출 승인 요청 DTO
+ */
+data class ApproveExpenseRequest(
+    val approved: Boolean,
+    val approvalNotes: String?
+)
+
+/**
+ * 지출 승인 응답 DTO
+ */
+data class ExpenseApprovalResponse(
+    val id: UUID,
+    val approved: Boolean,
+    val approvalStatus: String,
+    val approvedBy: UUID?,
+    val approvedAt: String?,
+    val approvalNotes: String?
+)
+
+/**
+ * 지출 유형 응답 DTO
+ */
+data class ExpenseTypeResponse(
+    val id: UUID,
+    val typeName: String,
+    val category: String,
+    val requiresApproval: Boolean,
+    val budgetLimit: BigDecimal?,
+    val isActive: Boolean
+)
+
+/**
+ * 업체 응답 DTO
+ */
+data class VendorResponse(
+    val id: UUID,
+    val vendorName: String,
+    val businessNumber: String?,
+    val contactPerson: String?,
+    val phoneNumber: String?,
+    val email: String?,
+    val isActive: Boolean
+)
+
+/**
+ * 정기 지출 생성 요청 DTO
+ */
+data class CreateRecurringExpenseRequest(
+    val expenseTypeId: UUID,
+    val vendorId: UUID?,
+    val amount: BigDecimal,
+    val description: String,
+    val recurringPeriod: String,
+    val startDate: LocalDate,
+    val dayOfMonth: Int?
+)
+
+/**
+ * 정기 지출 응답 DTO
+ */
+data class RecurringExpenseResponse(
+    val id: UUID,
+    val expenseTypeName: String,
+    val vendorName: String?,
+    val amount: BigDecimal,
+    val description: String,
+    val recurringPeriod: String,
+    val startDate: LocalDate,
+    val dayOfMonth: Int?,
+    val isActive: Boolean,
+    val generatedCount: Long
+)
+
+/**
+ * 지출 통계 응답 DTO
+ */
+data class ExpenseStatisticsResponse(
+    val totalExpense: BigDecimal,
+    val monthlyExpense: BigDecimal,
+    val yearlyExpense: BigDecimal,
+    val pendingApprovalCount: Long,
+    val pendingApprovalAmount: BigDecimal,
+    val expenseByCategory: Map<String, BigDecimal>,
+    val topExpenseTypes: List<ExpenseTypeStatistic>
+)
+
+/**
+ * 지출 유형 통계 DTO
+ */
+data class ExpenseTypeStatistic(
+    val typeName: String,
+    val amount: BigDecimal,
+    val count: Long
+)
+
+/**
+ * 지출 대시보드 응답 DTO
+ */
+data class ExpenseDashboardResponse(
+    val todayExpense: BigDecimal,
+    val monthlyExpense: BigDecimal,
+    val yearlyExpense: BigDecimal,
+    val pendingApprovalCount: Long,
+    val recentExpenses: List<ExpenseRecordResponse>
+)
+
+/**
+ * 예산 대비 지출 응답 DTO
+ */
+data class BudgetVsExpenseResponse(
+    val budgetAmount: BigDecimal,
+    val actualExpense: BigDecimal,
+    val remainingBudget: BigDecimal,
+    val usagePercentage: Double,
+    val isOverBudget: Boolean
+)
+
+/**
+ * 월별 지출 데이터 DTO
+ */
+data class MonthlyExpenseData(
+    val month: String,
+    val amount: BigDecimal,
+    val count: Long
+)
+
+/**
+ * 업체별 지출 데이터 DTO
+ */
+data class VendorExpenseData(
+    val vendorName: String,
+    val amount: BigDecimal,
+    val count: Long,
+    val percentage: Double
 )

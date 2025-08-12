@@ -1,14 +1,16 @@
 package com.qiro.domain.accounting.entity
 
 /**
- * 승인 상태 열거형
+ * 승인 상태 enum
  */
-enum class ApprovalStatus(val code: String, val displayName: String) {
-    PENDING("PENDING", "승인 대기"),
-    APPROVED("APPROVED", "승인됨"),
-    REJECTED("REJECTED", "거부됨");
+enum class ApprovalStatus(val displayName: String) {
+    PENDING("승인대기"), // 승인 대기
+    APPROVED("승인완료"), // 승인 완료
+    REJECTED("승인거부"); // 승인 거부
 
     companion object {
-        fun fromCode(code: String): ApprovalStatus? = values().find { it.code == code }
+        fun fromCode(code: String): ApprovalStatus? {
+            return values().find { it.name == code }
+        }
     }
 }

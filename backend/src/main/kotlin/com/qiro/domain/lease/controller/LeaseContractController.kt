@@ -1,5 +1,7 @@
 package com.qiro.domain.lease.controller
 
+// 임시 비활성화 - DTO 클래스 누락으로 인한 컴파일 에러 해결 후 활성화 예정
+/*
 import com.qiro.domain.lease.dto.*
 import com.qiro.domain.lease.entity.ContractStatus
 import com.qiro.domain.lease.service.LeaseContractService
@@ -180,3 +182,4 @@ class LeaseContractController(
         return ApiResponse.success()
     }
 }
+*/

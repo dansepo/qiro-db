@@ -166,9 +166,9 @@ class JournalEntryController(
     fun deleteJournalEntry(
         @Parameter(description = "분개 전표 ID") @PathVariable entryId: UUID,
         @CurrentUser userPrincipal: UserPrincipal
-    ): ApiResponse<Void> {
+    ): ApiResponse<Unit> {
         // 삭제 로직은 서비스에서 구현 필요
-        return ApiResponse.success(null, "분개 전표가 성공적으로 삭제되었습니다.")
+        return ApiResponse.success(Unit, "분개 전표가 성공적으로 삭제되었습니다.")
     }
 
     @Operation(summary = "승인 대기 분개 전표 조회", description = "승인 대기 중인 분개 전표 목록을 조회합니다.")

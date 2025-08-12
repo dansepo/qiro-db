@@ -37,8 +37,8 @@ class ExpenseManagementController(
         )
         
         val response = ExpenseRecordResponse(
-            id = expenseRecord.id,
-            expenseTypeName = expenseRecord.expenseType?.typeName ?: "",
+            id = expenseRecord.expenseRecordId,
+            expenseTypeName = expenseRecord.expenseType.typeName,
             vendorName = expenseRecord.vendor?.vendorName,
             amount = expenseRecord.amount,
             expenseDate = expenseRecord.expenseDate,
@@ -73,13 +73,15 @@ class ExpenseManagementController(
             endDate = endDate,
             expenseTypeId = expenseTypeId,
             vendorId = vendorId,
-            status = status
+            status = status,
+            page = page,
+            size = size
         )
         
         val responses = expenseRecords.map { record ->
             ExpenseRecordResponse(
-                id = record.id,
-                expenseTypeName = record.expenseType?.typeName ?: "",
+                id = record.expenseRecordId,
+                expenseTypeName = record.expenseType.typeName,
                 vendorName = record.vendor?.vendorName,
                 amount = record.amount,
                 expenseDate = record.expenseDate,
@@ -98,42 +100,45 @@ class ExpenseManagementController(
     /**
      * 지출 승인 처리
      */
-    @PostMapping("/approve")
+    @PostMapping("/approve/{expenseRecordId}")
     fun approveExpense(
         @RequestParam companyId: UUID,
+        @PathVariable expenseRecordId: UUID,
         @RequestBody request: ApproveExpenseRequest
     ): ResponseEntity<ExpenseApprovalResponse> {
-        val approval = expenseManagementService.approveExpense(
+        val expenseRecord = expenseManagementService.approveExpense(
             companyId = companyId,
-            expenseId = request.expenseId,
+            expenseRecordId = expenseRecordId,
             approved = request.approved,
-            approvalNotes = request.approvalNotes
+            approvalNotes = request.approvalNotes,
+            approvedBy = companyId // TODO: 실제 사용자 ID로 변경
         )
         
         val response = ExpenseApprovalResponse(
-            expenseId = request.expenseId,
+            id = expenseRecord.expenseRecordId,
             approved = request.approved,
-            approvalDate = LocalDate.now(),
-            approverName = "관리자", // 실제 구현에서는 현재 사용자 정보
-            approvalNotes = request.approvalNotes
+            approvalStatus = expenseRecord.approvalStatus?.name ?: "",
+            approvedBy = expenseRecord.approvedBy,
+            approvedAt = expenseRecord.approvedAt?.toString(),
+            approvalNotes = expenseRecord.approvalNotes
         )
         
         return ResponseEntity.ok(response)
     }
 
     /**
-     * 승인 대기 지출 목록 조회
+     * 승인 대기 목록 조회
      */
     @GetMapping("/pending-approvals")
     fun getPendingApprovals(
         @RequestParam companyId: UUID
     ): ResponseEntity<List<ExpenseRecordResponse>> {
-        val pendingExpenses = expenseManagementService.getPendingApprovals(companyId)
+        val expenseRecords = expenseManagementService.getPendingApprovals(companyId)
         
-        val responses = pendingExpenses.map { record ->
+        val responses = expenseRecords.map { record ->
             ExpenseRecordResponse(
-                id = record.id,
-                expenseTypeName = record.expenseType?.typeName ?: "",
+                id = record.expenseRecordId,
+                expenseTypeName = record.expenseType.typeName,
                 vendorName = record.vendor?.vendorName,
                 amount = record.amount,
                 expenseDate = record.expenseDate,
@@ -160,12 +165,11 @@ class ExpenseManagementController(
         
         val responses = expenseTypes.map { type ->
             ExpenseTypeResponse(
-                id = type.id,
+                id = type.expenseTypeId,
                 typeName = type.typeName,
-                category = type.category,
-                description = type.description,
+                category = type.category.name,
                 requiresApproval = type.requiresApproval,
-                budgetLimit = type.budgetLimit,
+                budgetLimit = type.approvalLimit,
                 isActive = type.isActive
             )
         }
@@ -185,13 +189,12 @@ class ExpenseManagementController(
         
         val responses = vendors.map { vendor ->
             VendorResponse(
-                id = vendor.id,
+                id = vendor.vendorId,
                 vendorName = vendor.vendorName,
                 businessNumber = vendor.businessNumber,
                 contactPerson = vendor.contactPerson,
                 phoneNumber = vendor.phoneNumber,
                 email = vendor.email,
-                address = vendor.address,
                 isActive = vendor.isActive
             )
         }
@@ -207,95 +210,19 @@ class ExpenseManagementController(
         @RequestParam companyId: UUID,
         @RequestBody request: CreateVendorRequest
     ): ResponseEntity<VendorResponse> {
-        val vendor = expenseManagementService.createVendor(
-            companyId = companyId,
-            vendorName = request.vendorName,
-            businessNumber = request.businessNumber,
-            contactPerson = request.contactPerson,
-            phoneNumber = request.phoneNumber,
-            email = request.email,
-            address = request.address
-        )
+        val vendor = expenseManagementService.createVendor(companyId, request)
         
         val response = VendorResponse(
-            id = vendor.id,
+            id = vendor.vendorId,
             vendorName = vendor.vendorName,
             businessNumber = vendor.businessNumber,
             contactPerson = vendor.contactPerson,
             phoneNumber = vendor.phoneNumber,
             email = vendor.email,
-            address = vendor.address,
             isActive = vendor.isActive
         )
         
         return ResponseEntity.ok(response)
-    }
-
-    /**
-     * 정기 지출 생성
-     */
-    @PostMapping("/recurring")
-    fun createRecurringExpense(
-        @RequestParam companyId: UUID,
-        @RequestBody request: CreateRecurringExpenseRequest
-    ): ResponseEntity<RecurringExpenseResponse> {
-        val recurringExpense = expenseManagementService.createRecurringExpense(
-            companyId = companyId,
-            expenseTypeId = request.expenseTypeId,
-            vendorId = request.vendorId,
-            amount = request.amount,
-            description = request.description,
-            recurringPeriod = request.recurringPeriod,
-            startDate = request.startDate,
-            endDate = request.endDate,
-            dayOfMonth = request.dayOfMonth
-        )
-        
-        val response = RecurringExpenseResponse(
-            id = recurringExpense.id,
-            expenseTypeName = recurringExpense.expenseType?.typeName ?: "",
-            vendorName = recurringExpense.vendor?.vendorName,
-            amount = recurringExpense.amount,
-            description = recurringExpense.description,
-            recurringPeriod = recurringExpense.recurringPeriod.name,
-            startDate = recurringExpense.startDate,
-            endDate = recurringExpense.endDate,
-            dayOfMonth = recurringExpense.dayOfMonth,
-            isActive = recurringExpense.isActive,
-            nextGenerationDate = recurringExpense.nextGenerationDate,
-            generatedCount = recurringExpense.generatedCount
-        )
-        
-        return ResponseEntity.ok(response)
-    }
-
-    /**
-     * 정기 지출 목록 조회
-     */
-    @GetMapping("/recurring")
-    fun getRecurringExpenses(
-        @RequestParam companyId: UUID
-    ): ResponseEntity<List<RecurringExpenseResponse>> {
-        val recurringExpenses = expenseManagementService.getRecurringExpenses(companyId)
-        
-        val responses = recurringExpenses.map { recurring ->
-            RecurringExpenseResponse(
-                id = recurring.id,
-                expenseTypeName = recurring.expenseType?.typeName ?: "",
-                vendorName = recurring.vendor?.vendorName,
-                amount = recurring.amount,
-                description = recurring.description,
-                recurringPeriod = recurring.recurringPeriod.name,
-                startDate = recurring.startDate,
-                endDate = recurring.endDate,
-                dayOfMonth = recurring.dayOfMonth,
-                isActive = recurring.isActive,
-                nextGenerationDate = recurring.nextGenerationDate,
-                generatedCount = recurring.generatedCount
-            )
-        }
-        
-        return ResponseEntity.ok(responses)
     }
 
     /**
@@ -307,12 +234,7 @@ class ExpenseManagementController(
         @RequestParam(required = false) year: Int?,
         @RequestParam(required = false) month: Int?
     ): ResponseEntity<ExpenseStatisticsResponse> {
-        val statistics = expenseManagementService.getExpenseStatistics(
-            companyId = companyId,
-            year = year ?: LocalDate.now().year,
-            month = month
-        )
-        
+        val statistics = expenseManagementService.getExpenseStatistics(companyId, year, month)
         return ResponseEntity.ok(statistics)
     }
 
@@ -325,79 +247,5 @@ class ExpenseManagementController(
     ): ResponseEntity<ExpenseDashboardResponse> {
         val dashboard = expenseManagementService.getExpenseDashboard(companyId)
         return ResponseEntity.ok(dashboard)
-    }
-
-    /**
-     * 예산 대비 지출 현황 조회
-     */
-    @GetMapping("/budget-vs-expense")
-    fun getBudgetVsExpense(
-        @RequestParam companyId: UUID,
-        @RequestParam(required = false) year: Int?,
-        @RequestParam(required = false) month: Int?
-    ): ResponseEntity<List<BudgetVsExpenseResponse>> {
-        val budgetVsExpense = expenseManagementService.getBudgetVsExpense(
-            companyId = companyId,
-            year = year ?: LocalDate.now().year,
-            month = month
-        )
-        
-        return ResponseEntity.ok(budgetVsExpense)
-    }
-
-    /**
-     * 정기 지출 자동 생성 실행
-     */
-    @PostMapping("/generate-recurring")
-    fun generateRecurringExpenses(
-        @RequestParam companyId: UUID,
-        @RequestParam targetMonth: String // YYYY-MM 형식
-    ): ResponseEntity<Map<String, Any>> {
-        val result = expenseManagementService.generateRecurringExpenses(companyId, targetMonth)
-        
-        val response = mapOf(
-            "success" to true,
-            "message" to "정기 지출이 생성되었습니다.",
-            "generatedCount" to result.size,
-            "targetMonth" to targetMonth
-        )
-        
-        return ResponseEntity.ok(response)
-    }
-
-    /**
-     * 월별 지출 현황 조회
-     */
-    @GetMapping("/monthly")
-    fun getMonthlyExpense(
-        @RequestParam companyId: UUID,
-        @RequestParam year: Int,
-        @RequestParam(required = false) expenseTypeId: UUID?
-    ): ResponseEntity<List<MonthlyExpenseData>> {
-        val monthlyData = expenseManagementService.getMonthlyExpense(
-            companyId = companyId,
-            year = year,
-            expenseTypeId = expenseTypeId
-        )
-        
-        return ResponseEntity.ok(monthlyData)
-    }
-
-    /**
-     * 업체별 지출 현황 조회
-     */
-    @GetMapping("/by-vendor")
-    fun getExpenseByVendor(
-        @RequestParam companyId: UUID,
-        @RequestParam(required = false) year: Int?,
-        @RequestParam(required = false) month: Int?
-    ): ResponseEntity<List<VendorExpenseData>> {
-        val vendorData = expenseManagementService.getExpenseByVendor(
-            companyId = companyId,
-            year = year ?: LocalDate.now().year,
-            month = month
-        )
-        
-        return ResponseEntity.ok(vendorData)
     }
 }
